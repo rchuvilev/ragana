@@ -1,19 +1,25 @@
 {
   "name": "ragbox",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "main": "index.js",
   "directories": {
     "doc": "docs",
     "test": "test"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test test/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test",
+    "bench": "node test/bench.mjs && node test/hashbench.mjs"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "description": "",
+  "license": "MIT",
+  "description": "Локальный RAG: ядро на WebView-совместимом JS, поверх — Android-апп и Chrome-расширение",
   "devDependencies": {
-    "fake-indexeddb": "^6.2.8"
-  }
+    "@types/node": "^26.6.6",
+    "fake-indexeddb": "^6.2.8",
+    "typescript": "^7.0.2"
+  },
+  "type": "module"
 }

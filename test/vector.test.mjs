@@ -2,10 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { VectorStore, normalize, DIM } from '../core/vector.mjs';
 
+/** @param {number} seed */
 const rnd = (seed) => {
   let s = seed;
   return () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) * 2 - 1;
 };
+/**
+ * @param {number} seed
+ * @param {number} [dim]
+ */
 const vec = (seed, dim = DIM) => {
   const r = rnd(seed);
   return Float32Array.from({ length: dim }, r);
@@ -13,7 +18,7 @@ const vec = (seed, dim = DIM) => {
 
 test('normalize даёт единичную длину', () => {
   const v = normalize(Float32Array.from([3, 4]));
-  assert.ok(Math.abs(Math.hypot(v[0], v[1]) - 1) < 1e-6);
+  assert.ok(Math.abs(Math.hypot(v[0] ?? 0, v[1] ?? 0) - 1) < 1e-6);
 });
 
 test('normalize не делит на ноль', () => {
@@ -26,8 +31,10 @@ test('поиск находит сам вектор первым со score ~1',
   for (let i = 0; i < 20; i++) vs.add(`d${i}`, vec(i + 1, 8));
   const target = vec(7, 8);
   const hits = vs.search(target, 3);
-  assert.equal(hits[0].id, 'd6');
-  assert.ok(hits[0].score > 0.999, `score=${hits[0].score}`);
+  const top = hits[0];
+  assert.ok(top, 'результат не пуст');
+  assert.equal(top.id, 'd6');
+  assert.ok(top.score > 0.999, `score=${top.score}`);
 });
 
 test('результаты отсортированы по убыванию', () => {
@@ -35,7 +42,8 @@ test('результаты отсортированы по убыванию', ()
   for (let i = 0; i < 30; i++) vs.add(`d${i}`, vec(i + 1, 8));
   const hits = vs.search(vec(3, 8), 5);
   for (let i = 1; i < hits.length; i++) {
-    assert.ok(hits[i - 1].score >= hits[i].score, 'порядок нарушен');
+    const prev = hits[i - 1], cur = hits[i];
+    assert.ok(prev && cur && prev.score >= cur.score, 'порядок нарушен');
   }
 });
 
@@ -54,7 +62,7 @@ test('рост ёмкости сохраняет ранее добавленно
   for (let i = 0; i < 50; i++) vs.add(`d${i}`, vec(i + 1, 4));
   assert.equal(vs.size, 50);
   // первый добавленный всё ещё находится
-  assert.equal(vs.search(vec(1, 4), 1)[0].id, 'd0');
+  assert.equal(vs.search(vec(1, 4), 1)[0]?.id, 'd0');
 });
 
 test('removeWhere удаляет и сохраняет остальные НАХОДИМЫМИ', () => {
@@ -66,6 +74,7 @@ test('removeWhere удаляет и сохраняет остальные НАХ
   // позитивный контроль: уцелевший вектор ДЕЙСТВИТЕЛЬНО ищется,
   // а не просто числится в ids — сдвиг copyWithin мог побить данные
   const hit = vs.search(vec(2, 8), 1)[0];
+  assert.ok(hit, 'после сжатия что-то находится');
   assert.equal(hit.id, 'f1:1');
   assert.ok(hit.score > 0.999, `после сжатия score=${hit.score}`);
   assert.ok(!vs.ids.some((id) => id.startsWith('f0:')));
@@ -97,7 +106,7 @@ test('serialize/deserialize — полный круг', () => {
   const a = vs.search(vec(5, 8), 3);
   const b = back.search(vec(5, 8), 3);
   assert.deepEqual(b.map((h) => h.id), a.map((h) => h.id));
-  assert.ok(Math.abs(a[0].score - b[0].score) < 1e-6);
+  assert.ok(Math.abs((a[0]?.score ?? 0) - (b[0]?.score ?? 0)) < 1e-6);
 });
 
 test('serialize не тащит неиспользованный хвост буфера', () => {

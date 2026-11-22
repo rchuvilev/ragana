@@ -14,8 +14,15 @@
 
 export const SNAPSHOTS = 'snapshots';
 
-/** Структура снимка. files: Map -> простой объект для structured clone. */
+/**
+ * Структура снимка. files: Map -> простой объект для structured clone.
+ * @param {string} root
+ * @param {Map<string, import('../types/index.js').FileEntry>} filesMap
+ * @param {{ts?: number, note?: string}} [opts]
+ * @returns {import('../types/index.js').Snapshot}
+ */
 export function makeSnapshot(root, filesMap, { ts = Date.now(), note = '' } = {}) {
+  /** @type {Record<string, import('../types/index.js').SnapshotFile>} */
   const files = {};
   let bytes = 0;
   for (const [path, e] of filesMap) {
@@ -31,8 +38,13 @@ export function makeSnapshot(root, filesMap, { ts = Date.now(), note = '' } = {}
   return { ts, root, note, count: filesMap.size, bytes, files };
 }
 
-/** Обратно в Map для diffSnapshots. */
+/**
+ * Обратно в Map для diffSnapshots.
+ * @param {import('../types/index.js').Snapshot | null | undefined} snap
+ * @returns {Map<string, import('../types/index.js').FileEntry>}
+ */
 export function snapshotToMap(snap) {
+  /** @type {Map<string, import('../types/index.js').FileEntry>} */
   const m = new Map();
   if (!snap) return m;
   for (const [path, e] of Object.entries(snap.files)) {
@@ -46,12 +58,21 @@ export function snapshotToMap(snap) {
 // вешался навсегда (onsuccess у транзакции не наступает никогда), и
 // node:test сообщал об этом как 'Promise resolution is still pending',
 // печатая при этом '# fail 0'. Поэтому две отдельные функции.
+/**
+ * @template T
+ * @param {IDBRequest<T>} req
+ * @returns {Promise<T>}
+ */
 const promisify = (req) =>
   new Promise((res, rej) => {
     req.onsuccess = () => res(req.result);
     req.onerror = () => rej(req.error);
   });
 
+/**
+ * @param {IDBTransaction} tx
+ * @returns {Promise<void>}
+ */
 const txDone = (tx) =>
   new Promise((res, rej) => {
     tx.oncomplete = () => res();
@@ -60,11 +81,15 @@ const txDone = (tx) =>
   });
 
 export class SnapshotLog {
+  /** @param {IDBDatabase} db */
   constructor(db) {
     this.db = db;
   }
 
-  /** Вызывается из onupgradeneeded общей БД. */
+  /**
+   * Вызывается из onupgradeneeded общей БД.
+   * @param {IDBDatabase} db
+   */
   static upgrade(db) {
     if (!db.objectStoreNames.contains(SNAPSHOTS)) {
       const s = db.createObjectStore(SNAPSHOTS, { keyPath: 'ts' });
@@ -72,30 +97,49 @@ export class SnapshotLog {
     }
   }
 
+  /**
+   * @param {import('../types/index.js').Snapshot} snap
+   * @returns {Promise<number>}
+   */
   async put(snap) {
     const tx = this.db.transaction([SNAPSHOTS], 'readwrite');
     await promisify(tx.objectStore(SNAPSHOTS).put(snap));
     return snap.ts;
   }
 
-  /** Самый свежий снимок для корня, либо null. */
+  /**
+   * Самый свежий снимок для корня, либо null.
+   * @param {string} root
+   * @returns {Promise<import('../types/index.js').Snapshot | null>}
+   */
   async latest(root) {
     const tx = this.db.transaction([SNAPSHOTS], 'readonly');
     const idx = tx.objectStore(SNAPSHOTS).index('byRoot');
+    /** @type {import('../types/index.js').Snapshot[]} */
     const all = await promisify(idx.getAll(IDBKeyRange.only(root)));
     if (!all.length) return null;
     return all.reduce((a, b) => (b.ts > a.ts ? b : a));
   }
 
+  /**
+   * @param {number} ts
+   * @returns {Promise<import('../types/index.js').Snapshot | undefined>}
+   */
   async get(ts) {
     const tx = this.db.transaction([SNAPSHOTS], 'readonly');
     return promisify(tx.objectStore(SNAPSHOTS).get(ts));
   }
 
-  /** История без тяжёлого files — для списка в интерфейсе. */
+  /**
+   * История без тяжёлого files — для списка в интерфейсе.
+   * @param {string} root
+   * @param {number} [limit]
+   * @returns {Promise<import('../types/index.js').SnapshotMeta[]>}
+   */
   async history(root, limit = 20) {
     const tx = this.db.transaction([SNAPSHOTS], 'readonly');
     const idx = tx.objectStore(SNAPSHOTS).index('byRoot');
+    /** @type {import('../types/index.js').Snapshot[]} */
     const all = await promisify(idx.getAll(IDBKeyRange.only(root)));
     return all
       .sort((a, b) => b.ts - a.ts)
@@ -107,10 +151,15 @@ export class SnapshotLog {
    * Оставить N последних снимков корня. Снимки нужны для diff и разбора
    * «что поменялось вчера», но неограниченная история — это утечка:
    * каждый снимок весит ~100 байт на файл.
+   *
+   * @param {string} root
+   * @param {number} [keep]
+   * @returns {Promise<number>} сколько удалено
    */
   async prune(root, keep = 10) {
     const tx = this.db.transaction([SNAPSHOTS], 'readwrite');
     const store = tx.objectStore(SNAPSHOTS);
+    /** @type {import('../types/index.js').Snapshot[]} */
     const all = await promisify(store.index('byRoot').getAll(IDBKeyRange.only(root)));
     const doomed = all.sort((a, b) => b.ts - a.ts).slice(keep);
     for (const s of doomed) store.delete(s.ts);
@@ -118,12 +167,17 @@ export class SnapshotLog {
     return doomed.length;
   }
 
+  /**
+   * @param {string | null} [root]
+   * @returns {Promise<void>}
+   */
   async clear(root = null) {
     const tx = this.db.transaction([SNAPSHOTS], 'readwrite');
     const store = tx.objectStore(SNAPSHOTS);
     if (root == null) {
       store.clear();
     } else {
+      /** @type {import('../types/index.js').Snapshot[]} */
       const all = await promisify(store.index('byRoot').getAll(IDBKeyRange.only(root)));
       for (const s of all) store.delete(s.ts);
     }

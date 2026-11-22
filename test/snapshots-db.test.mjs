@@ -13,12 +13,13 @@ async function freshDb(name = 'db' + Math.random()) {
   const factory = new IDBFactory();
   return new Promise((res, rej) => {
     const req = factory.open(name, 1);
-    req.onupgradeneeded = (e) => SnapshotLog.upgrade(e.target.result);
+    req.onupgradeneeded = () => SnapshotLog.upgrade(req.result);
     req.onsuccess = () => res(new SnapshotLog(req.result));
     req.onerror = () => rej(req.error);
   });
 }
 
+/** @param {Array<[string, string, number?]>} rows */
 const files = (...rows) =>
   new Map(rows.map(([p, h, s = 10]) => [p, entry(p, h, s)]));
 
@@ -34,7 +35,7 @@ test('snapshotToMap — обратное преобразование без п�
   const orig = files(['a', 'H1'], ['b', 'H2']);
   const back = snapshotToMap(makeSnapshot('/d', orig));
   assert.deepEqual([...back.keys()].sort(), ['a', 'b']);
-  assert.equal(back.get('a').hash, 'H1');
+  assert.equal(back.get('a')?.hash, 'H1');
 });
 
 test('snapshotToMap(null) -> пустая Map', () => {
@@ -46,8 +47,9 @@ test('put/latest — возвращается самый свежий', async ()
   await log.put(makeSnapshot('/docs', files(['a', 'H1']), { ts: 1000 }));
   await log.put(makeSnapshot('/docs', files(['a', 'H2']), { ts: 2000 }));
   const got = await log.latest('/docs');
+  assert.ok(got, 'снимок найден');
   assert.equal(got.ts, 2000);
-  assert.equal(got.files.a.hash, 'H2');
+  assert.equal(got.files.a?.hash, 'H2');
 });
 
 test('latest для неизвестного корня -> null', async () => {
@@ -59,8 +61,10 @@ test('корни изолированы друг от друга', async () => {
   const log = await freshDb();
   await log.put(makeSnapshot('/a', files(['x', 'H1']), { ts: 1 }));
   await log.put(makeSnapshot('/b', files(['y', 'H2']), { ts: 2 }));
-  assert.equal((await log.latest('/a')).files.x.hash, 'H1');
-  assert.ok(!(await log.latest('/a')).files.y, 'чужой файл не протёк');
+  const a = await log.latest('/a');
+  assert.ok(a);
+  assert.equal(a.files.x?.hash, 'H1');
+  assert.ok(!a.files.y, 'чужой файл не протёк');
 });
 
 test('🟢 сквозной сценарий: снимок -> diff со следующим', async () => {
@@ -89,9 +93,9 @@ test('history: по убыванию ts и без тяжёлого files', async
     await log.put(makeSnapshot('/docs', files(['a', 'H' + i]), { ts: i * 100 }));
   }
   const h = await log.history('/docs', 3);
-  assert.deepEqual(h.map((x) => x.ts), [500, 400, 300]);
-  assert.equal(h[0].files, undefined, 'список не тащит содержимое снимка');
-  assert.equal(h[0].count, 1);
+  assert.deepEqual(h.map((/** @type {{ts: number}} */ x) => x.ts), [500, 400, 300]);
+  assert.equal(/** @type {any} */ (h[0]).files, undefined, 'список не тащит содержимое снимка');
+  assert.equal(h[0]?.count, 1);
 });
 
 test('prune оставляет N последних', async () => {
@@ -102,8 +106,8 @@ test('prune оставляет N последних', async () => {
   const removed = await log.prune('/docs', 3);
   assert.equal(removed, 5);
   const h = await log.history('/docs', 99);
-  assert.deepEqual(h.map((x) => x.ts), [8, 7, 6]);
-  assert.equal((await log.latest('/docs')).ts, 8, 'свежий уцелел');
+  assert.deepEqual(h.map((/** @type {{ts: number}} */ x) => x.ts), [8, 7, 6]);
+  assert.equal((await log.latest('/docs'))?.ts, 8, 'свежий уцелел');
 });
 
 test('prune не трогает другие корни', async () => {

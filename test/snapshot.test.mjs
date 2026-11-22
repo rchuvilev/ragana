@@ -6,6 +6,7 @@ import {
   hasWork, pathsToPurge, pathsToIngest, describe,
 } from '../core/snapshot.mjs';
 
+/** @param {Array<[string, string, number?]>} rows */
 const snap = (...rows) => new Map(rows.map(([p, h, s = 10]) => [p, entry(p, h, s)]));
 
 test('hashBytes: одинаковый вход -> одинаковый хэш, разный -> разный', async () => {

@@ -13,18 +13,29 @@ export const DIM = 384;
  * Косинусное сходство для ПРЕДНОРМИРОВАННЫХ векторов = скалярное произведение.
  * Нормализация делается один раз при вставке, а не на каждом сравнении.
  */
+/**
+ * @param {Float32Array} a
+ * @param {Float32Array} b
+ * @param {number} [offB]
+ * @param {number} [dim]
+ * @returns {number}
+ */
 export function dot(a, b, offB = 0, dim = a.length) {
   let s = 0;
-  for (let i = 0; i < dim; i++) s += a[i] * b[offB + i];
+  for (let i = 0; i < dim; i++) s += (a[i] ?? 0) * (b[offB + i] ?? 0);
   return s;
 }
 
-/** Нормализует вектор на месте. Возвращает его же. */
+/**
+ * Нормализует вектор на месте. Возвращает его же.
+ * @param {Float32Array} v
+ * @returns {Float32Array}
+ */
 export function normalize(v) {
   let s = 0;
-  for (let i = 0; i < v.length; i++) s += v[i] * v[i];
+  for (let i = 0; i < v.length; i++) s += (v[i] ?? 0) ** 2;
   const n = Math.sqrt(s);
-  if (n > 0) for (let i = 0; i < v.length; i++) v[i] /= n;
+  if (n > 0) for (let i = 0; i < v.length; i++) v[i] = (v[i] ?? 0) / n;
   return v;
 }
 
@@ -36,10 +47,15 @@ export function normalize(v) {
  * которые иначе давили бы на сборщик мусора.
  */
 export class VectorStore {
+  /**
+   * @param {number} [dim]
+   * @param {number} [capacity]
+   */
   constructor(dim = DIM, capacity = 1024) {
     this.dim = dim;
     this.size = 0;
     this.data = new Float32Array(dim * capacity);
+    /** @type {string[]} */
     this.ids = [];
   }
 
@@ -47,7 +63,10 @@ export class VectorStore {
     return this.data.length / this.dim;
   }
 
-  /** Удваивает ёмкость, сохраняя уже записанное. */
+  /**
+   * Удваивает ёмкость, сохраняя уже записанное.
+   * @param {number} minCapacity
+   */
   _grow(minCapacity) {
     let cap = Math.max(1, this.capacity);
     while (cap < minCapacity) cap *= 2;
@@ -56,7 +75,12 @@ export class VectorStore {
     this.data = next;
   }
 
-  /** Добавляет вектор (копируется и нормализуется). Возвращает индекс. */
+  /**
+   * Добавляет вектор (копируется и нормализуется). Возвращает индекс.
+   * @param {string} id
+   * @param {Float32Array | number[]} vec
+   * @returns {number}
+   */
   add(id, vec) {
     if (vec.length !== this.dim) {
       throw new Error(`размерность ${vec.length} != ${this.dim}`);
@@ -75,12 +99,17 @@ export class VectorStore {
    * Сжатие на месте: живые строки сдвигаются к началу. Нужно для
    * «исключения удалённых файлов» — без этого индекс только растёт
    * и начинает цитировать документы, которых уже нет на диске.
+   *
+   * @param {(id: string) => boolean} pred
+   * @returns {number} сколько удалено
    */
   removeWhere(pred) {
     let write = 0;
+    /** @type {string[]} */
     const keptIds = [];
     for (let read = 0; read < this.size; read++) {
-      if (pred(this.ids[read])) continue;
+      const id = this.ids[read];
+      if (id === undefined || pred(id)) continue;
       if (write !== read) {
         this.data.copyWithin(
           write * this.dim,
@@ -88,7 +117,7 @@ export class VectorStore {
           (read + 1) * this.dim,
         );
       }
-      keptIds.push(this.ids[read]);
+      keptIds.push(id);
       write++;
     }
     const removed = this.size - write;
@@ -102,25 +131,35 @@ export class VectorStore {
    *
    * Вставка в маленький отсортированный массив вместо сортировки всего:
    * при k=5 и n=5000 это 5000 сравнений вместо n·log n.
+   *
+   * @param {Float32Array | number[]} query
+   * @param {number} [k]
+   * @returns {import('../types/index.js').Hit[]}
    */
   search(query, k = 5) {
     if (this.size === 0) return [];
     const q = normalize(Float32Array.from(query));
+    /** @type {import('../types/index.js').Hit[]} */
     const top = [];
     for (let i = 0; i < this.size; i++) {
       const score = dot(q, this.data, i * this.dim, this.dim);
+      const id = this.ids[i] ?? '';
+      const worst = top[top.length - 1];
       if (top.length < k) {
-        top.push({ index: i, id: this.ids[i], score });
+        top.push({ index: i, id, score });
         top.sort((a, b) => b.score - a.score);
-      } else if (score > top[top.length - 1].score) {
-        top[top.length - 1] = { index: i, id: this.ids[i], score };
+      } else if (worst && score > worst.score) {
+        top[top.length - 1] = { index: i, id, score };
         top.sort((a, b) => b.score - a.score);
       }
     }
     return top;
   }
 
-  /** Плоская выгрузка для IndexedDB: один ArrayBuffer + список id. */
+  /**
+   * Плоская выгрузка для IndexedDB: один ArrayBuffer + список id.
+   * @returns {import('../types/index.js').SerializedVectors}
+   */
   serialize() {
     return {
       dim: this.dim,
@@ -130,6 +169,10 @@ export class VectorStore {
     };
   }
 
+  /**
+   * @param {import('../types/index.js').SerializedVectors} obj
+   * @returns {VectorStore}
+   */
   static deserialize(obj) {
     const vs = new VectorStore(obj.dim, Math.max(1, obj.size));
     vs.data.set(obj.data);

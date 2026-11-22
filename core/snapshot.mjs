@@ -15,13 +15,23 @@
 // меньше, чем 4 чанка. Предфильтр по mtime для КОРРЕКТНОСТИ не нужен,
 // он оставлен только как необязательный ускоритель (см. fastSkip).
 
-/** Хэш содержимого. Возвращает hex-строку. */
+/**
+ * Хэш содержимого. Возвращает hex-строку.
+ *
+ * Тип subtle задан СТРУКТУРНО, а не как DOM-ный SubtleCrypto: в Node это
+ * webcrypto.subtle, в браузере — crypto.subtle, и их номинальные типы
+ * не совпадают, хотя оба умеют digest(). Ядро обязано работать в обоих.
+ *
+ * @param {{digest: (alg: string, data: any) => Promise<ArrayBuffer>}} subtle
+ * @param {ArrayBufferView | ArrayBuffer} bytes
+ * @returns {Promise<string>}
+ */
 export async function hashBytes(subtle, bytes) {
   const digest = await subtle.digest('SHA-256', bytes);
   const view = new Uint8Array(digest);
   let out = '';
   for (let i = 0; i < view.length; i++) {
-    out += view[i].toString(16).padStart(2, '0');
+    out += (view[i] ?? 0).toString(16).padStart(2, '0');
   }
   return out;
 }
@@ -30,6 +40,12 @@ export async function hashBytes(subtle, bytes) {
  * Запись о файле в снимке.
  * mtime/size хранятся НЕ для сравнения, а чтобы дать fastSkip шанс
  * пропустить хэширование заведомо нетронутых файлов.
+ *
+ * @param {string} path
+ * @param {string} hash
+ * @param {number} size
+ * @param {number} [mtime]
+ * @returns {import('../types/index.js').FileEntry}
  */
 export function entry(path, hash, size, mtime = 0) {
   return { path, hash, size, mtime };
@@ -43,6 +59,10 @@ export function entry(path, hash, size, mtime = 0) {
  * (то есть изменился зря), мы просто пересчитаем хэш и увидим, что он
  * прежний — лишняя работа, но НЕ потеря изменения. Асимметрия намеренная:
  * ошибка в сторону «перепроверить» безопасна, в сторону «пропустить» — нет.
+ *
+ * @param {{size: number, mtime: number}} now
+ * @param {{hash?: string, size: number, mtime: number} | null | undefined} prev
+ * @returns {boolean}
  */
 export function fastSkip(now, prev) {
   return (
@@ -60,15 +80,16 @@ export function fastSkip(now, prev) {
  * Отдельно выделены renamed: содержимое уже проиндексировано, нужно лишь
  * переписать путь у существующих чанков — без повторного эмбеддинга.
  *
- * @param {Map<string,{hash:string,size:number}>} now
- * @param {Map<string,{hash:string,size:number}>} prev
+ * @param {Map<string, {hash: string, size: number}>} now
+ * @param {Map<string, {hash: string, size: number}>} prev
+ * @returns {import('../types/index.js').SnapshotDiff}
  */
 export function diffSnapshots(now, prev) {
-  const added = [];
-  const changed = [];
-  const removed = [];
-  const same = [];
-  const renamed = []; // {from, to, hash}
+  /** @type {string[]} */ const added = [];
+  /** @type {string[]} */ const changed = [];
+  /** @type {string[]} */ const removed = [];
+  /** @type {string[]} */ const same = [];
+  /** @type {import('../types/index.js').Rename[]} */ const renamed = [];
 
   for (const [path, cur] of now) {
     const old = prev.get(path);
@@ -81,20 +102,26 @@ export function diffSnapshots(now, prev) {
   }
 
   // Переименование: исчезнувший путь и появившийся с ТЕМ ЖЕ хэшем.
-  // Хэш -> список исчезнувших путей, чтобы несколько одинаковых файлов
-  // не схлопнулись в одно сопоставление.
+  // Хэш -> СПИСОК исчезнувших путей, чтобы несколько одинаковых файлов
+  // не схлопнулись в одно сопоставление (дубликаты в папке — норма).
+  /** @type {Map<string, string[]>} */
   const goneByHash = new Map();
   for (const path of removed) {
-    const h = prev.get(path).hash;
-    if (!goneByHash.has(h)) goneByHash.set(h, []);
-    goneByHash.get(h).push(path);
+    const old = prev.get(path);
+    if (!old) continue;
+    const pool = goneByHash.get(old.hash);
+    if (pool) pool.push(path);
+    else goneByHash.set(old.hash, [path]);
   }
+
+  /** @type {string[]} */
   const stillAdded = [];
   for (const path of added) {
-    const h = now.get(path).hash;
-    const pool = goneByHash.get(h);
-    if (pool && pool.length) {
-      renamed.push({ from: pool.shift(), to: path, hash: h });
+    const cur = now.get(path);
+    const pool = cur ? goneByHash.get(cur.hash) : undefined;
+    const from = pool && pool.length ? pool.shift() : undefined;
+    if (cur && from !== undefined) {
+      renamed.push({ from, to: path, hash: cur.hash });
     } else {
       stillAdded.push(path);
     }
@@ -110,22 +137,38 @@ export function diffSnapshots(now, prev) {
   };
 }
 
+/**
+ * @param {import('../types/index.js').SnapshotDiff} d
+ * @returns {boolean}
+ */
 export function hasWork(d) {
   return (
     d.added.length + d.changed.length + d.removed.length + d.renamed.length > 0
   );
 }
 
-/** Старые чанки, подлежащие удалению (изменённые + удалённые, НЕ переименованные). */
+/**
+ * Старые чанки, подлежащие удалению (изменённые + удалённые, НЕ переименованные).
+ * @param {import('../types/index.js').SnapshotDiff} d
+ * @returns {string[]}
+ */
 export function pathsToPurge(d) {
   return [...d.changed, ...d.removed];
 }
 
-/** Файлы, требующие чтения и эмбеддинга. */
+/**
+ * Файлы, требующие чтения и эмбеддинга.
+ * @param {import('../types/index.js').SnapshotDiff} d
+ * @returns {string[]}
+ */
 export function pathsToIngest(d) {
   return [...d.added, ...d.changed];
 }
 
+/**
+ * @param {import('../types/index.js').SnapshotDiff} d
+ * @returns {string}
+ */
 export function describe(d) {
   if (!hasWork(d)) return `актуально: ${d.same.length} файлов`;
   const p = [];

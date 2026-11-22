@@ -5,10 +5,12 @@ import {
   isSupported, parserVersionFor, needsReparse, KIND,
 } from '../core/formats.mjs';
 
+/** @param {number[]} b */
 const bytes = (...b) => new Uint8Array(b);
 const PDF = bytes(0x25, 0x50, 0x44, 0x46, 0x2d, 0x31);
 const JPEG = bytes(0xff, 0xd8, 0xff, 0xe0, 0, 0);
 const PNG = bytes(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a);
+/** @param {string} s */
 const utf8 = (s) => new TextEncoder().encode(s);
 
 test('sniff опознаёт основные сигнатуры', () => {
@@ -91,19 +93,20 @@ test('needsReparse: нет прошлой записи -> разбирать', (
 test('needsReparse: другой хэш -> разбирать', () => {
   assert.equal(
     needsReparse({ hash: 'H2', format: 'pdf' },
-                 { hash: 'H1', format: 'pdf', parserVersion: 1 }), true);
+                 { hash: 'H1', parserVersion: 1 }), true);
 });
 
 test('🔴 needsReparse: НОВЫЙ ПАРСЕР при том же хэше -> разбирать', () => {
   // Это и есть причина существования parserVersion: содержимое файла
   // не менялось, поэтому хэш прежний, и diff сказал бы «работы нет».
   // Индекс остался бы навсегда построен старым парсером.
-  const prev = { hash: 'H', format: 'pdf', parserVersion: 0 };
+  /** @type {{hash: string, parserVersion: number}} */
+  const prev = { hash: 'H', parserVersion: 0 };
   assert.equal(parserVersionFor('pdf'), 1);
   assert.equal(needsReparse({ hash: 'H', format: 'pdf' }, prev), true);
 });
 
 test('needsReparse: всё совпало -> НЕ разбирать', () => {
-  const prev = { hash: 'H', format: 'pdf', parserVersion: parserVersionFor('pdf') };
+  const prev = { hash: 'H', parserVersion: parserVersionFor('pdf') };
   assert.equal(needsReparse({ hash: 'H', format: 'pdf' }, prev), false);
 });

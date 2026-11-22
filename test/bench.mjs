@@ -4,6 +4,7 @@ import { VectorStore, DIM } from '../core/vector.mjs';
 
 const EMBED_MS = 438; // замер 2026-11-22, multilingual-e5-small на этом телефоне
 
+/** @param {number} seed */
 const rnd = (seed) => {
   let s = seed;
   return () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff) * 2 - 1;

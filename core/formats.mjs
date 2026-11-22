@@ -11,8 +11,11 @@
 // лишь подсказка: на Android файлы приезжают как `document(1)` без
 // расширения, а `.txt` сплошь и рядом оказывается PDF-ом.
 
-/** Сигнатуры: [смещение, байты, формат]. Порядок = приоритет. */
-const MAGIC = [
+/**
+ * Сигнатуры: [смещение, байты, формат]. Порядок = приоритет.
+ * @type {ReadonlyArray<readonly [number, readonly number[], import('../types/index.js').Format]>}
+ */
+const MAGIC = /** @type {const} */ ([
   [0, [0x25, 0x50, 0x44, 0x46], 'pdf'],          // %PDF
   [0, [0xff, 0xd8, 0xff], 'jpeg'],
   [0, [0x89, 0x50, 0x4e, 0x47], 'png'],
@@ -21,9 +24,13 @@ const MAGIC = [
   [0, [0x50, 0x4b, 0x03, 0x04], 'zip'],          // docx/xlsx/epub тоже
   [8, [0x57, 0x45, 0x42, 0x50], 'webp'],         // RIFF....WEBP
   [4, [0x66, 0x74, 0x79, 0x70], 'heic'],         // ....ftyp
-];
+]);
 
-/** Формат по первым байтам. null если не опознан. */
+/**
+ * Формат по первым байтам. null если не опознан.
+ * @param {Uint8Array} bytes
+ * @returns {import('../types/index.js').Format | null}
+ */
 export function sniff(bytes) {
   for (const [off, sig, fmt] of MAGIC) {
     if (bytes.length < off + sig.length) continue;
@@ -36,13 +43,18 @@ export function sniff(bytes) {
   return null;
 }
 
-/** Расширение в нижнем регистре без точки, либо ''. */
+/**
+ * Расширение в нижнем регистре без точки, либо ''.
+ * @param {string} path
+ * @returns {string}
+ */
 export function extOf(path) {
   const base = path.slice(path.lastIndexOf('/') + 1);
   const dot = base.lastIndexOf('.');
   return dot <= 0 ? '' : base.slice(dot + 1).toLowerCase();
 }
 
+/** @type {Record<string, import('../types/index.js').Format>} */
 const EXT_MAP = {
   txt: 'text', md: 'text', markdown: 'text', csv: 'text', log: 'text',
   json: 'text', xml: 'text', html: 'text', htm: 'text', rtf: 'text',
@@ -56,6 +68,9 @@ const EXT_MAP = {
  * Итоговый формат. Содержимое ПЕРЕВЕШИВАЕТ расширение, потому что
  * расширение подделывается и теряется, а magic bytes — нет.
  * Текст не имеет сигнатуры, поэтому распознаётся отдельно.
+ * @param {string} path
+ * @param {Uint8Array | null | undefined} bytes
+ * @returns {import('../types/index.js').Format}
  */
 export function detect(path, bytes) {
   const sniffed = bytes ? sniff(bytes) : null;
@@ -68,6 +83,9 @@ export function detect(path, bytes) {
 /**
  * Эвристика «это текст»: нет нулевых байтов и мало управляющих символов
  * в первом килобайте. UTF-8 с кириллицей проходит, бинарь — нет.
+ * @param {Uint8Array} bytes
+ * @param {number} [probe]
+ * @returns {boolean}
  */
 export function looksLikeText(bytes, probe = 1024) {
   const n = Math.min(bytes.length, probe);
@@ -75,7 +93,7 @@ export function looksLikeText(bytes, probe = 1024) {
   let ctrl = 0;
   for (let i = 0; i < n; i++) {
     const b = bytes[i];
-    if (b === 0) return false;
+    if (b === undefined || b === 0) return false;
     const printable = b === 9 || b === 10 || b === 13 || b >= 32;
     if (!printable) ctrl++;
   }
@@ -83,6 +101,7 @@ export function looksLikeText(bytes, probe = 1024) {
 }
 
 /** Группы: как файл вообще превращается в текст. */
+/** @type {Record<import('../types/index.js').Kind, import('../types/index.js').Kind>} */
 export const KIND = {
   text: 'text',     // читается напрямую
   pdf: 'pdf',       // слой текста, иначе OCR постранично
@@ -94,6 +113,7 @@ export const KIND = {
 /**
  * Реестр. parserVersion поднимается РУКАМИ при изменении парсера —
  * это и запускает переиндексацию только затронутых файлов.
+ * @type {Record<import('../types/index.js').Format, import('../types/index.js').FormatInfo>}
  */
 export const REGISTRY = {
   text:  { kind: KIND.text,    parser: 'plain',  parserVersion: 1, ocr: false },
@@ -109,11 +129,20 @@ export const REGISTRY = {
   unknown: { kind: KIND.unknown, parser: null,   parserVersion: 0, ocr: false },
 };
 
+/**
+ * @param {string} fmt
+ * @returns {import('../types/index.js').FormatInfo}
+ */
 export function formatInfo(fmt) {
-  return REGISTRY[fmt] || REGISTRY.unknown;
+  return REGISTRY[/** @type {import('../types/index.js').Format} */ (fmt)]
+    || REGISTRY.unknown;
 }
 
-/** Поддерживается ли формат вообще. */
+/**
+ * Поддерживается ли формат вообще.
+ * @param {string} fmt
+ * @returns {boolean}
+ */
 export function isSupported(fmt) {
   return formatInfo(fmt).parser !== null;
 }
@@ -121,6 +150,8 @@ export function isSupported(fmt) {
 /**
  * Версия парсера для файла — входит в условие переиндексации
  * наравне с хэшем содержимого.
+ * @param {string} fmt
+ * @returns {number}
  */
 export function parserVersionFor(fmt) {
   return formatInfo(fmt).parserVersion;
@@ -129,6 +160,9 @@ export function parserVersionFor(fmt) {
 /**
  * Устарел ли разбор файла.
  * Два независимых повода: другое содержимое ЛИБО более новый парсер.
+ * @param {{hash: string, format: string}} now
+ * @param {{hash: string, parserVersion?: number} | null | undefined} prev
+ * @returns {boolean}
  */
 export function needsReparse(now, prev) {
   if (!prev) return true;
