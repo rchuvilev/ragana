@@ -222,20 +222,25 @@ export class Engine {
    * @param {number} [opts.pool] глубина каждого списка до слияния
    * @param {boolean} [opts.expand] расширять ли запрос
    * @param {boolean} [opts.merge] склеивать ли соседние цитаты
+   * @param {number[]} [opts.weights] веса [лексика, вектор] для RRF
+   * @param {'hybrid'|'vector'|'lexical'} [opts.mode] способ поиска
    * @returns {Promise<{citations: Citation[], query: string, added: string[], dropped: string[]}>}
    */
-  async search(question, { k = 5, pool = 20, expand = true, merge = true } = {}) {
+  async search(question, { k = 5, pool = 20, expand = true, merge = true, weights, mode = 'hybrid' } = {}) {
     const exp = expand ? expandQuery(question, stem) : { query: question, added: [] };
 
-    const lex = this.bm25.search(exp.query, pool);
+    const lex = mode === 'vector' ? [] : this.bm25.search(exp.query, pool);
 
     let vec = /** @type {import('../types/index.js').Hit[]} */ ([]);
-    if (this.vectors.size > 0) {
+    if (mode !== 'lexical' && this.vectors.size > 0) {
       const [qv] = await this.embedder.embed([asQuery(exp.query)]);
       if (qv) vec = this.vectors.search(qv, pool);
     }
 
-    const fused = rrf([lex, vec], { limit: Math.max(k * 3, pool) });
+    const fused = rrf([lex, vec], {
+      limit: Math.max(k * 3, pool),
+      ...(weights ? { weights } : {}),
+    });
     const lost = dropped(fused, this.chunks);
     let cites = link(fused, this.chunks, { limit: merge ? k * 2 : k });
     if (merge) {

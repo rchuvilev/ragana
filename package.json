@@ -21,5 +21,8 @@
     "fake-indexeddb": "^6.2.8",
     "typescript": "^7.0.2"
   },
-  "type": "module"
+  "type": "module",
+  "dependencies": {
+    "@huggingface/transformers": "^4.3.2"
+  }
 }

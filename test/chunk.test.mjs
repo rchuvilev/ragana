@@ -144,3 +144,33 @@ test('весь текст покрыт объединением чанков', (
   }
   assert.deepEqual(missed, [], `не покрыты значимые символы: ${missed.slice(0, 5)}`);
 });
+
+test('🔴 чанки НЕ ДУБЛИРУЮТСЯ (баг отката перекрытия)', () => {
+  // На реальном файле 4 из 22 чанков оказались байт-в-байт одинаковыми:
+  // откат на overlap возвращал i на позицию предыдущего чанка, и
+  // следующая итерация набирала РОВНО ТОТ ЖЕ диапазон. В выдаче такие
+  // близнецы занимали по два места из пяти с одинаковой оценкой.
+  const texts = [POLICY, 'Раз. Два. Три. Четыре. Пять. Шесть. Семь. Восемь.'];
+  for (const src of texts) {
+    for (const target of [80, 120, 200, 500, 900]) {
+      for (const overlap of [0, 20, 50, 150]) {
+        if (overlap >= target) continue;
+        const chunks = chunkText(src, { path: 'd', target, overlap });
+        const uniqueText = new Set(chunks.map((c) => c.text));
+        assert.equal(uniqueText.size, chunks.length,
+          `дубликаты при target=${target} overlap=${overlap}`);
+        const uniqueSpan = new Set(chunks.map((c) => `${c.start}:${c.end}`));
+        assert.equal(uniqueSpan.size, chunks.length,
+          `повтор диапазона при target=${target} overlap=${overlap}`);
+      }
+    }
+  }
+});
+
+test('короткий документ делится, а не остаётся одним чанком', () => {
+  // при target=900 текст в 496 символов становился ОДНИМ чанком, и поиск
+  // не мог отличить один абзац от другого внутри того же документа
+  const chunks = chunkText(POLICY, { path: 'd', target: 900, overlap: 150 });
+  assert.ok(chunks.length >= 3, `получилось всего ${chunks.length} чанков`);
+  assert.deepEqual(verifyOffsets(POLICY, chunks), [], 'координаты целы');
+});

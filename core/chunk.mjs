@@ -97,6 +97,7 @@ export function sentences(text) {
  * @param {number} [opts.target] целевой размер в символах
  * @param {number} [opts.overlap] перекрытие в символах
  * @param {(offset: number) => number | undefined} [opts.pageAt] номер страницы по смещению
+ * @param {number} [opts.minChunks] на сколько частей делить короткий документ
  * @returns {Chunk[]}
  */
 export function chunkText(text, opts = {}) {
@@ -105,6 +106,7 @@ export function chunkText(text, opts = {}) {
     target = 900,
     overlap = 150,
     pageAt,
+    minChunks = 3,
   } = opts;
 
   if (overlap >= target) {
@@ -115,6 +117,19 @@ export function chunkText(text, opts = {}) {
   const out = [];
   const sents = sentences(text);
   if (sents.length === 0) return out;
+
+  // 🔴 Короткий документ целиком влезает в target и становится ОДНИМ
+  // чанком — тогда поиск не может отличить абзац про франшизу от абзаца
+  // про опьянение, и весь смысл чанкинга теряется. Замечено на реальном
+  // файле 496 символов при target=900: один чанк на весь договор, и
+  // ранжирование выдавало регламент отпусков на вопрос про оплату.
+  // Для таких документов целевой размер уменьшается так, чтобы вышло
+  // хотя бы minChunks частей.
+  let effectiveTarget = target;
+  if (sents.length >= minChunks && text.length < target * minChunks) {
+    effectiveTarget = Math.max(120, Math.ceil(text.length / minChunks));
+  }
+  const effectiveOverlap = Math.min(overlap, Math.floor(effectiveTarget / 3));
 
   let i = 0;
   let ord = 0;
@@ -129,14 +144,16 @@ export function chunkText(text, opts = {}) {
     while (j + 1 < sents.length) {
       const next = sents[j + 1];
       if (!next) break;
-      if (next[1] - start > target) break;
+      if (next[1] - start > effectiveTarget) break;
       end = next[1];
       j++;
     }
 
     const raw = text.slice(start, end);
     const trimmed = raw.trim();
-    if (trimmed.length > 0) {
+    const lastOut = out[out.length - 1];
+    const isRepeat = lastOut !== undefined && lastOut.text === trimmed;
+    if (trimmed.length > 0 && !isRepeat) {
       // Координаты корректируются на обрезанные пробелы, иначе цитата
       // подсветит лишние переводы строк
       const lead = raw.length - raw.trimStart().length;
@@ -160,17 +177,29 @@ export function chunkText(text, opts = {}) {
     if (j + 1 >= sents.length) break;
 
     // Откат на overlap символов назад — но минимум на одно предложение
-    // вперёд, иначе цикл застрянет на длинном предложении
+    // вперёд, иначе цикл застрянет на длинном предложении.
+    //
+    // 🔴 РАНЬШЕ ЗДЕСЬ РОЖДАЛИСЬ ДУБЛИКАТЫ: откат мог вернуть i на позицию,
+    // с которой уже начинался предыдущий чанк, и следующая итерация
+    // набирала РОВНО ТОТ ЖЕ диапазон. На реальном файле 4 из 22 чанков
+    // оказались байт-в-байт одинаковыми ([161:322] дважды). В выдаче они
+    // занимали по два места из пяти с одинаковой оценкой, вытесняя
+    // полезные результаты — именно это делало гибрид хуже чистого E5.
     let back = j;
     let acc = 0;
     while (back > i) {
       const s = sents[back];
       if (!s) break;
       acc += s[1] - s[0];
-      if (acc >= overlap) break;
+      if (acc >= effectiveOverlap) break;
       back--;
     }
-    i = Math.max(i + 1, back);
+    const nextI = Math.max(i + 1, back);
+    // Защита от повтора: если с новой позиции получится тот же самый
+    // диапазон, что уже выдан, сдвигаемся дальше.
+    i = nextI;
+    const peek = sents[i];
+    if (peek && peek[0] === start) i = Math.min(i + 1, sents.length);
   }
 
   return out;
