@@ -7,7 +7,15 @@ import {
 
 const SRC = 'Франшиза составляет 300 евро. Выплата производится в течение 10 дней. Сервис работает круглосуточно.';
 
-/** @returns {import('../types/index.js').Chunk} */
+/**
+ * @param {string} id
+ * @param {string} path
+ * @param {number} start
+ * @param {number} end
+ * @param {number} [ord]
+ * @param {number} [page]
+ * @returns {import('../types/index.js').Chunk}
+ */
 const ch = (id, path, start, end, ord = 0, page = undefined) => {
   /** @type {any} */
   const c = { id, path, text: SRC.slice(start, end), start, end, ord };

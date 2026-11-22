@@ -81,24 +81,29 @@ export function mergeAdjacent(cites) {
   const out = [];
   for (const list of byPath.values()) {
     list.sort((a, b) => a.chunk.start - b.chunk.start);
-    /** @type {Citation | null} */
-    let cur = null;
+    /** @type {Citation[]} */
+    const merged = [];
     for (const c of list) {
-      if (cur && c.chunk.start <= cur.chunk.end) {
-        // пересекаются или встык — расширяем интервал
-        const start = Math.min(cur.chunk.start, c.chunk.start);
-        const end = Math.max(cur.chunk.end, c.chunk.end);
-        cur = {
-          chunk: { ...cur.chunk, start, end, text: '' },
-          score: Math.max(cur.score, c.score),
-          via: cur.via === c.via ? cur.via : 'hybrid',
+      const prev = merged.length > 0 ? merged[merged.length - 1] : undefined;
+      if (prev && c.chunk.start <= prev.chunk.end) {
+        // пересекаются или встык — расширяем интервал.
+        // text обнуляется: после склейки он восстанавливается из исходника
+        // через rehydrate(), чтобы цитата осталась ДОСЛОВНОЙ вырезкой.
+        merged[merged.length - 1] = {
+          chunk: {
+            ...prev.chunk,
+            start: Math.min(prev.chunk.start, c.chunk.start),
+            end: Math.max(prev.chunk.end, c.chunk.end),
+            text: '',
+          },
+          score: Math.max(prev.score, c.score),
+          via: prev.via === c.via ? prev.via : 'hybrid',
         };
       } else {
-        if (cur) out.push(cur);
-        cur = { ...c };
+        merged.push({ ...c });
       }
     }
-    if (cur) out.push(cur);
+    out.push(...merged);
   }
   return out.sort((a, b) => b.score - a.score);
 }
