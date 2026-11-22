@@ -1,0 +1,360 @@
+// Веб-слой ragana. Одна и та же сборка работает:
+//   - в Android WebView (через виртуальный origin, см. android/)
+//   - как страница Chrome-расширения
+//   - в обычном браузере
+//
+// Поэтому здесь нет ни одного обращения к Node API, а хранилище —
+// IndexedDB, единственное, доступное во всех трёх средах одинаково.
+
+import { Engine } from '../core/engine.mjs';
+import { VectorStore } from '../core/vector.mjs';
+import { hashBytes, entry } from '../core/snapshot.mjs';
+import { detect, isSupported, parserVersionFor, formatInfo } from '../core/formats.mjs';
+import { sourceLabel } from '../core/cite.mjs';
+import { Store } from '../core/store.mjs';
+
+const $ = (id) => /** @type {any} */ (document.getElementById(id));
+
+const ui = {
+  setup: $('setup'), status: $('status'), ask: $('ask'), results: $('results'),
+  pick: $('btn-pick'), folder: $('btn-folder'), files: $('btn-files'),
+  fileInput: $('file-input'), fallbackNote: $('fallback-note'),
+  index: $('btn-index'), reset: $('btn-reset'),
+  statFiles: $('stat-files'), statChunks: $('stat-chunks'), statDir: $('stat-dir'),
+  progress: $('progress'), bar: $('bar'), progressText: $('progress-text'),
+  diff: $('diff'), q: $('q'), askBtn: $('btn-ask'),
+  expand: $('opt-expand'), mode: $('opt-mode'), toast: $('toast'),
+};
+
+/** @type {{engine: Engine|null, store: Store|null, dirHandle: any, root: string, files: Map<string, any>}} */
+const state = { engine: null, store: null, dirHandle: null, root: '', files: new Map() };
+
+let toastTimer = 0;
+/** @param {string} msg @param {boolean} [isErr] */
+function toast(msg, isErr = false) {
+  ui.toast.textContent = msg;
+  ui.toast.classList.toggle('err', isErr);
+  ui.toast.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => ui.toast.classList.add('hidden'), 3200);
+}
+
+// ---------- эмбеддер ----------
+
+/**
+ * Загружает Transformers.js из CDN при первом использовании.
+ * В WebView и расширении он кладётся локально — см. android/assets.
+ * @returns {Promise<import('../core/engine.mjs').Embedder>}
+ */
+async function loadEmbedder() {
+  ui.progressText.textContent = 'загрузка модели (один раз, ~113 МБ)...';
+  ui.progress.classList.remove('hidden');
+  const { pipeline, env } = await import(
+    'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2'
+  );
+  env.allowLocalModels = false;
+  // В браузере воркеры работают, и numThreads даёт реальное ускорение —
+  // в отличие от Node, где пришлось ставить 1 (blob: не грузится).
+  env.backends.onnx.wasm.numThreads = Math.min(4, navigator.hardwareConcurrency || 2);
+
+  const extractor = await pipeline(
+    'feature-extraction', 'Xenova/multilingual-e5-small', { quantized: true },
+  );
+  ui.progress.classList.add('hidden');
+
+  return {
+    dim: 384,
+    async embed(texts) {
+      if (texts.length === 0) return [];
+      const out = await extractor(texts, { pooling: 'mean', normalize: true });
+      const dim = out.dims[out.dims.length - 1] ?? 384;
+      /** @type {Float32Array[]} */
+      const vecs = [];
+      for (let i = 0; i < texts.length; i++) {
+        vecs.push(Float32Array.from(out.data.slice(i * dim, (i + 1) * dim)));
+      }
+      return vecs;
+    },
+  };
+}
+
+// ---------- доступ к файлам ----------
+
+/**
+ * Обход каталога через File System Access API.
+ * @param {any} dirHandle
+ * @param {string} [prefix]
+ * @returns {Promise<Map<string, {file: File, path: string}>>}
+ */
+async function walkDir(dirHandle, prefix = '') {
+  /** @type {Map<string, {file: File, path: string}>} */
+  const out = new Map();
+  for await (const [name, handle] of dirHandle.entries()) {
+    if (name.startsWith('.')) continue;
+    const path = prefix ? `${prefix}/${name}` : name;
+    if (handle.kind === 'directory') {
+      if (['node_modules', 'build', 'dist'].includes(name)) continue;
+      for (const [k, v] of await walkDir(handle, path)) out.set(k, v);
+    } else {
+      out.set(path, { file: await handle.getFile(), path });
+    }
+  }
+  return out;
+}
+
+/**
+ * Строит ФС-снимок по списку файлов.
+ * @param {Map<string, {file: File, path: string}>} found
+ */
+async function buildSnapshot(found) {
+  /** @type {Map<string, any>} */
+  const files = new Map();
+  /** @type {Array<{path: string, why: string}>} */
+  const skipped = [];
+
+  for (const [path, { file }] of found) {
+    if (file.size === 0) { skipped.push({ path, why: 'пустой' }); continue; }
+    if (file.size > 64 * 1024 * 1024) { skipped.push({ path, why: 'больше 64 МБ' }); continue; }
+
+    const head = new Uint8Array(await file.slice(0, 64).arrayBuffer());
+    const format = detect(path, head);
+    if (!isSupported(format)) { skipped.push({ path, why: `формат ${format}` }); continue; }
+
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const hash = await hashBytes(crypto.subtle, bytes);
+    const e = entry(path, hash, file.size, Math.floor(file.lastModified));
+    e.format = format;
+    e.parserVersion = parserVersionFor(format);
+    files.set(path, e);
+  }
+  return { files, skipped };
+}
+
+/**
+ * @param {Map<string, {file: File, path: string}>} found
+ * @returns {(path: string) => Promise<string>}
+ */
+function makeReader(found) {
+  return async (path) => {
+    const rec = found.get(path);
+    if (!rec) throw new Error(`файл исчез: ${path}`);
+    const bytes = new Uint8Array(await rec.file.arrayBuffer());
+    const format = detect(path, bytes.subarray(0, 64));
+    const info = formatInfo(format);
+    if (info.kind === 'text') return new TextDecoder('utf-8').decode(bytes);
+    if (info.kind === 'pdf') {
+      const { extractPdfText, looksEmpty } = await import('./pdf-web.js');
+      const text = extractPdfText(bytes);
+      if (looksEmpty(text)) {
+        throw new Error(`${path}: нет текстового слоя, нужен OCR`);
+      }
+      return text;
+    }
+    throw new Error(`${path}: формат ${format} пока не поддерживается`);
+  };
+}
+
+// ---------- сохранение ----------
+
+async function persist() {
+  if (!state.store || !state.engine) return;
+  const e = state.engine;
+  await state.store.saveVectors(e.vectors.serialize());
+  await state.store.putChunks([...e.chunks.values()]);
+  for (const f of e.files.values()) await state.store.putFile(f);
+}
+
+async function restore() {
+  if (!state.store || !state.engine) return false;
+  const e = state.engine;
+  const files = await state.store.allFiles();
+  if (files.size === 0) return false;
+  for (const [p, f] of files) e.files.set(p, f);
+  const v = await state.store.loadVectors();
+  if (v) e.vectors = VectorStore.deserialize(v);
+  for (const id of e.vectors.ids) {
+    const [chunk] = await state.store.getChunks([id]);
+    if (chunk) {
+      e.chunks.set(chunk.id, chunk);
+      e.bm25.add(chunk.id, chunk.text);
+    }
+  }
+  return true;
+}
+
+// ---------- интерфейс ----------
+
+function refreshStats() {
+  const e = state.engine;
+  if (!e) return;
+  ui.statFiles.textContent = String(e.fileCount);
+  ui.statChunks.textContent = String(e.chunkCount);
+  ui.statDir.textContent = state.root;
+  ui.status.classList.remove('hidden');
+  ui.ask.classList.toggle('hidden', e.chunkCount === 0);
+  ui.setup.classList.add('hidden');
+}
+
+/** @param {string} text @param {string[]} terms */
+function highlight(text, terms) {
+  if (terms.length === 0) return escapeHtml(text);
+  const safe = terms
+    .filter((t) => t.length > 3)
+    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (safe.length === 0) return escapeHtml(text);
+  // Граница слова через \p{L}, а НЕ \b: \b определён через [A-Za-z0-9_]
+  // и с кириллицей не работает (проверено замером).
+  const re = new RegExp(`(?:^|[^\\p{L}])((?:${safe.join('|')})\\p{L}*)`, 'giu');
+  let out = '';
+  let last = 0;
+  for (const m of text.matchAll(re)) {
+    const idx = (m.index ?? 0) + m[0].length - (m[1] ?? '').length;
+    out += escapeHtml(text.slice(last, idx)) + '<mark>' + escapeHtml(m[1] ?? '') + '</mark>';
+    last = idx + (m[1] ?? '').length;
+  }
+  return out + escapeHtml(text.slice(last));
+}
+
+/** @param {string} s */
+function escapeHtml(s) {
+  return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] ?? c));
+}
+
+/** @param {any[]} citations @param {string[]} terms @param {number} ms */
+function renderResults(citations, terms, ms) {
+  if (citations.length === 0) {
+    ui.results.innerHTML = '<div class="card muted">Ничего не найдено</div>';
+    return;
+  }
+  const label = { hybrid: 'смысл + слова', vector: 'смысл', lexical: 'слова' };
+  ui.results.innerHTML = citations.map((c) => `
+    <article class="hit ${c.via}">
+      <div class="hit-head">
+        <span class="hit-src">${escapeHtml(sourceLabel(c.chunk))}</span>
+        <span class="hit-meta">${label[c.via]} · ${c.score.toFixed(4)}</span>
+      </div>
+      <div class="hit-text">${highlight(c.chunk.text, terms)}</div>
+    </article>
+  `).join('') + `<div class="muted small" style="padding:0 4px">${citations.length} цитат за ${Math.round(ms)} мс</div>`;
+}
+
+// ---------- действия ----------
+
+async function pickFolder() {
+  if (!('showDirectoryPicker' in window)) {
+    ui.fallbackNote.classList.remove('hidden');
+    toast('Выбор папки недоступен — добавьте файлы', true);
+    return;
+  }
+  try {
+    state.dirHandle = await /** @type {any} */ (window).showDirectoryPicker({ mode: 'read' });
+  } catch {
+    return; // пользователь отменил
+  }
+  state.root = state.dirHandle.name;
+  await initEngine();
+  toast(`папка: ${state.root}`);
+  await runIndex();
+}
+
+async function initEngine() {
+  if (state.engine) return;
+  const embedder = await loadEmbedder();
+  state.engine = new Engine({ embedder });
+  state.store = await Store.open(indexedDB);
+  await restore();
+  refreshStats();
+}
+
+async function runIndex() {
+  const e = state.engine;
+  if (!e) { toast('сначала выберите папку', true); return; }
+
+  ui.index.disabled = true;
+  ui.progress.classList.remove('hidden');
+  try {
+    const found = state.dirHandle
+      ? await walkDir(state.dirHandle)
+      : state.files;
+    const { files, skipped } = await buildSnapshot(found);
+
+    const res = await e.sync(files, makeReader(found), (p) => {
+      const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+      ui.bar.style.width = `${pct}%`;
+      const name = p.file ? p.file.split('/').pop() : '';
+      ui.progressText.textContent =
+        p.phase === 'embed' ? `${name}: ${p.done}/${p.total}` :
+        p.phase === 'read' ? `чтение ${name}` : 'готово';
+    });
+
+    await persist();
+    refreshStats();
+    ui.diff.textContent = res.summary +
+      (skipped.length ? ` · пропущено ${skipped.length}` : '');
+    toast('индекс обновлён');
+  } catch (err) {
+    toast(String(/** @type {Error} */ (err).message ?? err), true);
+  } finally {
+    ui.index.disabled = false;
+    ui.progress.classList.add('hidden');
+    ui.bar.style.width = '0';
+  }
+}
+
+async function runAsk() {
+  const e = state.engine;
+  const q = ui.q.value.trim();
+  if (!e || !q) return;
+  ui.askBtn.disabled = true;
+  try {
+    const t0 = performance.now();
+    const r = await e.search(q, {
+      k: 5,
+      expand: ui.expand.checked,
+      mode: ui.mode.value,
+    });
+    renderResults(r.citations, [...q.split(/\s+/), ...r.added], performance.now() - t0);
+  } catch (err) {
+    toast(String(/** @type {Error} */ (err).message ?? err), true);
+  } finally {
+    ui.askBtn.disabled = false;
+  }
+}
+
+async function runReset() {
+  if (!state.store) return;
+  await state.store.clear();
+  state.engine = null;
+  state.files.clear();
+  ui.results.innerHTML = '';
+  ui.diff.textContent = '';
+  ui.status.classList.add('hidden');
+  ui.ask.classList.add('hidden');
+  ui.setup.classList.remove('hidden');
+  toast('индекс сброшен');
+}
+
+// ---------- события ----------
+
+ui.pick.addEventListener('click', pickFolder);
+ui.folder.addEventListener('click', pickFolder);
+ui.index.addEventListener('click', runIndex);
+ui.reset.addEventListener('click', runReset);
+ui.askBtn.addEventListener('click', runAsk);
+ui.q.addEventListener('keydown', (/** @type {KeyboardEvent} */ ev) => {
+  if (ev.key === 'Enter') runAsk();
+});
+ui.files.addEventListener('click', () => ui.fileInput.click());
+ui.fileInput.addEventListener('change', async () => {
+  const list = /** @type {FileList} */ (ui.fileInput.files);
+  state.files = new Map(
+    [...list].map((f) => [f.name, { file: f, path: f.name }]),
+  );
+  state.root = `${list.length} файлов`;
+  await initEngine();
+  await runIndex();
+});
+
+if (!('showDirectoryPicker' in window)) {
+  ui.fallbackNote.classList.remove('hidden');
+}
