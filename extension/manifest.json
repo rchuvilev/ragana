@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "ragana",
+  "version": "0.1.0",
+  "description": "Локальный поиск по своим документам с цитатами. Файлы не покидают устройство.",
+  "permissions": ["storage", "unlimitedStorage"],
+  "host_permissions": ["https://cdn.jsdelivr.net/*"],
+  "action": {
+    "default_title": "ragana"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["app.html", "core/*", "*.js", "*.css"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "background": {
+    "service_worker": "sw.js",
+    "type": "module"
+  }
+}
