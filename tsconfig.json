@@ -22,5 +22,5 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["core/**/*.mjs", "test/**/*.mjs", "types/**/*.d.ts"]
+  "include": ["core/**/*.mjs", "node/**/*.mjs", "test/**/*.mjs", "types/**/*.d.ts"]
 }
