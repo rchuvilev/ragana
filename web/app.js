@@ -49,8 +49,11 @@ function toast(msg, isErr = false) {
 async function loadEmbedder() {
   ui.progressText.textContent = 'загрузка модели (один раз, ~113 МБ)...';
   ui.progress.classList.remove('hidden');
+  // В APK библиотека лежит в assets (офлайн), в браузере — с CDN.
   const { pipeline, env } = await import(
-    'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2'
+    hasNative()
+      ? './vendor/transformers.js'
+      : 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2'
   );
   env.allowLocalModels = false;
   // В браузере воркеры работают, и numThreads даёт реальное ускорение —
@@ -240,7 +243,40 @@ function renderResults(citations, terms, ms) {
 
 // ---------- действия ----------
 
+/** Есть ли Android-мост (APK-сборка). */
+const hasNative = () => typeof (/** @type {any} */ (window).Native) !== 'undefined';
+
+/**
+ * Файлы из Android SAF. В WebView нет File System Access API, поэтому
+ * дерево обходится нативно, а содержимое приходит base64 через мост —
+ * JS-интерфейс Android не умеет передавать бинарные данные.
+ * @returns {Promise<Map<string, {file: File, path: string}>>}
+ */
+async function nativeFiles() {
+  const N = /** @type {any} */ (window).Native;
+  /** @type {Array<{path: string, size: number, mtime: number, uri: string}>} */
+  const list = JSON.parse(N.listFiles());
+  /** @type {Map<string, {file: File, path: string}>} */
+  const out = new Map();
+  for (const it of list) {
+    const b64 = N.readFile(it.uri);
+    if (!b64) continue;
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const file = new File([bytes], it.path.split('/').pop() ?? it.path, {
+      lastModified: it.mtime,
+    });
+    out.set(it.path, { file, path: it.path });
+  }
+  return out;
+}
+
 async function pickFolder() {
+  if (hasNative()) {
+    /** @type {any} */ (window).Native.pickFolder();
+    return; // продолжение в window.__onFolderPicked
+  }
   if (!('showDirectoryPicker' in window)) {
     ui.fallbackNote.classList.remove('hidden');
     toast('Выбор папки недоступен — добавьте файлы', true);
@@ -273,9 +309,11 @@ async function runIndex() {
   ui.index.disabled = true;
   ui.progress.classList.remove('hidden');
   try {
-    const found = state.dirHandle
-      ? await walkDir(state.dirHandle)
-      : state.files;
+    const found = hasNative()
+      ? await nativeFiles()
+      : state.dirHandle
+        ? await walkDir(state.dirHandle)
+        : state.files;
     const { files, skipped } = await buildSnapshot(found);
 
     const res = await e.sync(files, makeReader(found), (p) => {
@@ -355,6 +393,23 @@ ui.fileInput.addEventListener('change', async () => {
   await runIndex();
 });
 
-if (!('showDirectoryPicker' in window)) {
+// Вызывается из MainActivity после выбора папки в системном SAF
+/** @type {any} */ (window).__onFolderPicked = async () => {
+  state.root = 'выбранная папка';
+  await initEngine();
+  await runIndex();
+};
+
+// Аппаратная кнопка Back: true = мы что-то закрыли, false = выходим
+/** @type {any} */ (window).__onBack = () => {
+  if (ui.results.innerHTML !== '') {
+    ui.results.innerHTML = '';
+    ui.q.value = '';
+    return true;
+  }
+  return false;
+};
+
+if (!('showDirectoryPicker' in window) && !hasNative()) {
   ui.fallbackNote.classList.remove('hidden');
 }
