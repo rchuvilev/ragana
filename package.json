@@ -1,5 +1,5 @@
 {
-  "name": "ragbox",
+  "name": "ragana",
   "version": "0.1.0",
   "main": "index.js",
   "directories": {
@@ -15,7 +15,7 @@
   "keywords": [],
   "author": "",
   "license": "MIT",
-  "description": "Локальный RAG: ядро на WebView-совместимом JS, поверх — Android-апп и Chrome-расширение",
+  "description": "Локальный RAG на телефоне: папка с документами (текст/PDF/сканы) -> индекс -> ответы с цитатами. Ядро на WebView-совместимом JS, поверх — Android APK и Chrome-расширение.",
   "devDependencies": {
     "@types/node": "^26.6.6",
     "fake-indexeddb": "^6.2.8",
