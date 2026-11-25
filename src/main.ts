@@ -23,7 +23,7 @@ const C = {
 };
 
 /** Действия в порядке приоритета: первый встреченный флаг побеждает. */
-const ACTIONS = ['index', 'search', 'open', 'gui', 'status', 'help'] as const;
+const ACTIONS = ['index', 'search', 'open', 'gui', 'status', 'mcp', 'help'] as const;
 export type Action = (typeof ACTIONS)[number];
 
 export interface ParsedArgs {
@@ -114,6 +114,7 @@ function helpText(): string {
   ${C.c('ragana --open')}               открыть папку документов
   ${C.c('ragana --gui')}                интерфейс в терминале
   ${C.c('ragana --status')}             что в индексе
+  ${C.c('ragana --mcp')}                сервер MCP поверх stdio
 
 ${C.dim('Без флагов запускается --gui.')}
 ${C.dim('Если флагов действия несколько — работает только первый.')}
@@ -308,6 +309,14 @@ async function main(): Promise<number> {
       } finally {
         store.close();
       }
+    }
+
+    case 'mcp': {
+      // Режим MCP-сервера: типизированный контракт вместо разбора
+      // текстового вывода. Через него ragana подключается к Claude Code,
+      // Codex и любому другому MCP-клиенту.
+      const { runMcp } = await import('./mcp.ts');
+      return runMcp(makeEmbedder);
     }
 
     case 'gui': {

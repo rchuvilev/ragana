@@ -7,3 +7,10 @@ vendor/
 dist/
 assets/ragana.iconset/
 assets/png/
+dist-mac-intel/
+dist-mac-silicon/
+dist-win/
+dist-linux/
+dist-webpage/
+dist-npm/
+dist-plugin/

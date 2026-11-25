@@ -7,10 +7,22 @@
     "test": "test"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs",
+    "test": "bun test test/*.test.ts && node --test test/*.test.mjs",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test",
-    "bench": "node test/bench.mjs && node test/hashbench.mjs"
+    "bench": "node test/bench.mjs && node test/hashbench.mjs",
+    "vendor": "sh tools/vendor.sh",
+    "icons": "sh tools/icons.sh",
+    "build:mac:intel": "bun scripts/build-desktop.ts mac:intel",
+    "build:mac:silicon": "bun scripts/build-desktop.ts mac:silicon",
+    "build:win": "bun scripts/build-desktop.ts win",
+    "build:linux": "bun scripts/build-desktop.ts linux",
+    "build:webpage": "bun scripts/build-webpage.ts",
+    "build:npm": "bun scripts/build-npm.ts",
+    "build:plugin": "bun scripts/build-plugin.ts",
+    "build:all": "bun scripts/build-all.ts",
+    "plugin:check": "bun scripts/build-plugin.ts --check",
+    "verify": "sh tools/verify-standalone.sh"
   },
   "keywords": [],
   "author": "",
