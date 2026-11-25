@@ -20,6 +20,7 @@ const ui = {
   pick: $('btn-pick'), folder: $('btn-folder'), files: $('btn-files'),
   fileInput: $('file-input'), fallbackNote: $('fallback-note'),
   index: $('btn-index'), reset: $('btn-reset'),
+  indexTop: $('btn-index-top'), resetTop: $('btn-reset-top'),
   statFiles: $('stat-files'), statChunks: $('stat-chunks'), statDir: $('stat-dir'),
   progress: $('progress'), bar: $('bar'), progressText: $('progress-text'),
   diff: $('diff'), q: $('q'), askBtn: $('btn-ask'),
@@ -185,7 +186,66 @@ async function restore() {
   return true;
 }
 
+// ---------- история поисков ----------
+
+/**
+ * Запись истории в IndexedDB.
+ *
+ * В бинаре история пишется файлами в searches/, но в браузере доступ к
+ * папке даётся ТОЛЬКО НА ЧТЕНИЕ (showDirectoryPicker mode:'read'), и
+ * писать рядом с документами нельзя без отдельного разрешения.
+ * localStorage не подходит: лимит ~5 МБ и только строки, а цитаты
+ * бывают длинными.
+ *
+ * Формат совпадает с файловым: { "<промпт>": { "<путь>": "<текст>" } } —
+ * чтобы историю можно было выгрузить и сравнить с бинарём.
+ */
+async function saveSearchHistory(prompt, citations) {
+  if (!state.store) return;
+  const now = new Date();
+  const p = (n, w = 2) => String(n).padStart(w, '0');
+  const ts = [
+    `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`,
+    `${p(now.getHours())}-${p(now.getMinutes())}-${p(now.getSeconds())}`,
+    p(now.getMilliseconds(), 3),
+  ].join('---');
+
+  const byPath = {};
+  for (const c of citations) {
+    const key = sourceLabel(c.chunk);
+    // Несколько фрагментов одного файла склеиваются, сохраняя порядок
+    // ранжирования, иначе часть результатов потерялась бы
+    byPath[key] = byPath[key] ? `${byPath[key]}\n\n---\n\n${c.chunk.text}` : c.chunk.text;
+  }
+
+  try {
+    await state.store.setMeta(`search:${ts}`, { [prompt]: byPath });
+  } catch (e) {
+    // История — вспомогательная вещь: её отказ не должен ломать поиск
+    console.warn('история не сохранена:', e);
+  }
+}
+
+/** Выгрузка истории: для сверки с бинарём и анализа. */
+async function exportHistory() {
+  if (!state.store) return [];
+  return state.store.listMeta('search:');
+}
+
 // ---------- интерфейс ----------
+
+/**
+ * Включает кнопки шапки.
+ *
+ * Отключены до появления движка: нажатие «проиндексировать» без
+ * выбранной папки не имеет смысла, а отключённая кнопка объясняет это
+ * лучше, чем сообщение об ошибке после клика.
+ */
+function syncTopButtons() {
+  const ready = state.engine !== null;
+  ui.indexTop.disabled = !ready;
+  ui.resetTop.disabled = !ready;
+}
 
 function refreshStats() {
   const e = state.engine;
@@ -196,6 +256,7 @@ function refreshStats() {
   ui.status.classList.remove('hidden');
   ui.ask.classList.toggle('hidden', e.chunkCount === 0);
   ui.setup.classList.add('hidden');
+  syncTopButtons();
 }
 
 /** @param {string} text @param {string[]} terms */
@@ -352,6 +413,7 @@ async function runAsk() {
       mode: ui.mode.value,
     });
     renderResults(r.citations, [...q.split(/\s+/), ...r.added], performance.now() - t0);
+    await saveSearchHistory(q, r.citations);
   } catch (err) {
     toast(String(/** @type {Error} */ (err).message ?? err), true);
   } finally {
@@ -369,6 +431,7 @@ async function runReset() {
   ui.status.classList.add('hidden');
   ui.ask.classList.add('hidden');
   ui.setup.classList.remove('hidden');
+  syncTopButtons();
   toast('индекс сброшен');
 }
 
@@ -378,6 +441,9 @@ ui.pick.addEventListener('click', pickFolder);
 ui.folder.addEventListener('click', pickFolder);
 ui.index.addEventListener('click', runIndex);
 ui.reset.addEventListener('click', runReset);
+// Те же действия из шапки: доступны, не прокручивая страницу
+ui.indexTop.addEventListener('click', runIndex);
+ui.resetTop.addEventListener('click', runReset);
 ui.askBtn.addEventListener('click', runAsk);
 ui.q.addEventListener('keydown', (/** @type {KeyboardEvent} */ ev) => {
   if (ev.key === 'Enter') runAsk();

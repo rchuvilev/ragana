@@ -9,8 +9,18 @@
 </head>
 <body>
 <header class="bar">
-  <h1>ragana</h1>
-  <button id="btn-folder" class="ghost" title="Выбрать папку">📁</button>
+  <div class="brand">
+    <img src="icon.png" alt="" class="logo" width="28" height="28">
+    <h1>ragana</h1>
+  </div>
+  <!-- Кнопки в шапке, а не только в скрытой секции: индексация и сброс
+       нужны в любой момент, а секция состояния появляется лишь после
+       выбора папки. Отключены до загрузки движка. -->
+  <div class="bar-actions">
+    <button id="btn-folder" class="ghost icon-btn" title="Выбрать папку">📁</button>
+    <button id="btn-index-top" class="ghost icon-btn" title="Проиндексировать изменения" disabled>⟳</button>
+    <button id="btn-reset-top" class="ghost icon-btn danger" title="Сбросить индекс" disabled>🗑</button>
+  </div>
 </header>
 
 <main>

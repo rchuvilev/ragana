@@ -126,3 +126,64 @@ test('clear(root) чистит только свой корень', async () => 
   assert.equal(await log.latest('/a'), null);
   assert.ok(await log.latest('/b'), '/b не затронут');
 });
+
+// ---------- история поисков в meta ----------
+
+import { Store } from '../core/store.mjs';
+
+/** Store на чистой БД: тесты не должны видеть состояние друг друга. */
+async function freshStore() {
+  return Store.open(new IDBFactory(), 'store' + Math.random());
+}
+
+test('🟢 история поиска сохраняется и читается', async () => {
+  const store = await freshStore();
+  await store.setMeta('search:2026-11-25---10-00-00---000', {
+    'какая франшиза': { 'полис.txt': 'Франшиза 300 евро' },
+  });
+  const rows = await store.listMeta('search:');
+  assert.equal(rows.length, 1);
+  assert.deepEqual(rows[0]?.value, {
+    'какая франшиза': { 'полис.txt': 'Франшиза 300 евро' },
+  });
+});
+
+test('🔴 история возвращается от НОВЫХ к старым', async () => {
+  // Ключи содержат метку времени, поэтому обратный лексикографический
+  // порядок = хронологический. Без сортировки пользователь видел бы
+  // первым самый старый поиск.
+  const store = await freshStore();
+  for (const ts of ['10-00-00---000', '10-00-05---000', '09-59-00---000']) {
+    await store.setMeta(`search:2026-11-25---${ts}`, { q: {} });
+  }
+  const rows = await store.listMeta('search:');
+  assert.equal(rows.length, 3);
+  assert.ok(rows[0]?.key.includes('10-00-05'), `первым должен быть новейший: ${rows[0]?.key}`);
+  assert.ok(rows[2]?.key.includes('09-59-00'), 'последним — самый старый');
+});
+
+test('🔴 префикс НЕ захватывает чужие записи meta', async () => {
+  // В meta лежат и векторы, и модель — выборка истории не должна их
+  // подхватывать, иначе выгрузка истории вернёт двоичный мусор.
+  const store = await freshStore();
+  await store.setMeta('search:1', { a: {} });
+  await store.setMeta('model', 'e5:384');
+  await store.setMeta('other:1', { b: {} });
+
+  const rows = await store.listMeta('search:');
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]?.key, 'search:1');
+});
+
+test('listMeta соблюдает предел', async () => {
+  const store = await freshStore();
+  for (let i = 0; i < 10; i++) {
+    await store.setMeta(`search:${String(i).padStart(2, '0')}`, { q: {} });
+  }
+  assert.equal((await store.listMeta('search:', 3)).length, 3);
+});
+
+test('пустая история — пустой список', async () => {
+  const store = await freshStore();
+  assert.deepEqual(await store.listMeta('search:'), []);
+});

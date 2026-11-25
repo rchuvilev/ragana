@@ -220,6 +220,43 @@ export class Store {
   }
 
   /** @returns {Promise<import('../types/index.js').SerializedVectors | null>} */
+  /**
+   * Произвольная запись в meta — используется для истории поисков.
+   *
+   * В бинаре история пишется файлами в searches/, но в браузере папка
+   * доступна ТОЛЬКО НА ЧТЕНИЕ, поэтому история живёт здесь.
+   *
+   * @param {string} key
+   * @param {unknown} value
+   * @returns {Promise<void>}
+   */
+  async setMeta(key, value) {
+    const tx = this._tx(['meta'], 'readwrite');
+    tx.objectStore('meta').put({ key, value });
+    await txDone(tx);
+  }
+
+  /**
+   * Все записи meta с указанным префиксом, по убыванию ключа.
+   *
+   * Ключи истории содержат метку времени, поэтому обратный
+   * лексикографический порядок = от новых к старым.
+   *
+   * @param {string} prefix
+   * @param {number} [limit]
+   * @returns {Promise<Array<{key: string, value: unknown}>>}
+   */
+  async listMeta(prefix, limit = 50) {
+    const tx = this._tx(['meta'], 'readonly');
+    /** @type {Array<{key: string, value: unknown}>} */
+    const rows = await promisify(tx.objectStore('meta').getAll(
+      IDBKeyRange.bound(prefix, prefix + '\uffff'),
+    ));
+    return rows
+      .sort((a, b) => b.key.localeCompare(a.key))
+      .slice(0, limit);
+  }
+
   async loadVectors() {
     const tx = this._tx(['meta'], 'readonly');
     /** @type {{key: string, value: import('../types/index.js').SerializedVectors} | undefined} */
