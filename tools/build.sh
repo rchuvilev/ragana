@@ -1,50 +1,108 @@
 #!/bin/sh
-# Сборка единого исполняемого файла через bun build --compile.
+# Сборка исполняемых файлов под все платформы.
 #
-# Проверено на этом устройстве: aarch64/musl, бинарь ~75 МБ (туда входит
-# сам рантайм Bun — это цена отсутствия зависимостей у пользователя).
+#   sh tools/build.sh              для текущей системы
+#   sh tools/build.sh windows      кросс-сборка под Windows
+#   sh tools/build.sh all          всё, что возможно отсюда
 #
-# 🔴 МОДЕЛЬ И БИБЛИОТЕКА В БИНАРЬ НЕ ВШИВАЮТСЯ: onnxruntime-web тянет
-# .wasm, а модель — 113 МБ, и оба грузятся по путям во время работы.
-# Поэтому рядом с бинарём должен лежать каталог с ними, либо путь
-# задаётся через RAGANA_LIB_ROOT.
+# ВСЁ ВНУТРИ: модель эмбеддингов, WASM-рантайм ONNX и JS-библиотеки
+# вшиваются в бинарь. Проверяется это не наличием файла, а запуском при
+# УБРАННЫХ с диска models/ и node_modules/ — см. tools/verify-standalone.sh
 set -e
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="${1:-$ROOT/ragana}"
+DIST="$ROOT/dist"
+VERSION="$(grep -o '"version": *"[^"]*"' "$ROOT/package.json" | head -1 | cut -d'"' -f4)"
 
 cd "$ROOT"
+mkdir -p "$DIST"
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
+warn() { printf '\033[33m%s\033[0m\n' "$*"; }
 
-say "сборка $OUT"
-bun build src/main.ts \
-  --compile \
-  --minify \
-  --target bun \
-  --outfile "$OUT"
+# vendor/ нужен до сборки: onnxruntime-common собирается в один файл
+[ -f vendor/ort-common.mjs ] || sh tools/vendor.sh
 
-say "проверка"
-# Проверяем не факт существования файла, а то, что он ОТВЕЧАЕТ:
-# битый бинарь существует ровно так же, как рабочий.
-if ! "$OUT" --help > /dev/null 2>&1; then
-  echo "бинарь не отвечает на --help"
-  exit 1
-fi
+TARGET="${1:-native}"
 
-SIZE=$(wc -c < "$OUT")
-echo "  размер: $(echo "$SIZE" | awk '{printf "%.1f МБ", $1/1048576}')"
-echo "  --help: ok"
+build_native() {
+  say "сборка для текущей системы"
+  bun build src/main.ts --compile --minify --outfile "$DIST/ragana"
+  chmod +x "$DIST/ragana"
+  printf '  %.1f МБ\n' "$(echo "$(wc -c < "$DIST/ragana") / 1048576" | bc -l)"
+}
 
-# Позитивный контроль: несуществующий флаг не должен молча проглатываться
-if "$OUT" --такого-флага-нет > /dev/null 2>&1; then
-  echo "  предупреждение: неизвестный флаг принят без возражений"
-fi
+build_windows() {
+  say "сборка для Windows x64"
+  # 🔴 --windows-icon РАБОТАЕТ ТОЛЬКО ПРИ СБОРКЕ НА WINDOWS:
+  # 'error: Using --windows-icon is only available when compiling on Windows'.
+  # Отсюда иконка вшивается отдельным шагом через rcedit (см. ниже),
+  # а метаданные задаются только на самой Windows.
+  if [ "$(uname -s)" = "MINGW64_NT"* ] || [ -n "$WINDIR" ]; then
+    bun build src/main.ts --compile --minify \
+      --target=bun-windows-x64 \
+      --windows-icon=./assets/ragana.ico \
+      --windows-title="ragana" \
+      --windows-publisher="hexstack" \
+      --windows-version="${VERSION}.0" \
+      --windows-description="Локальный RAG по вашим документам" \
+      --outfile "$DIST/ragana.exe"
+    echo "  иконка и метаданные вшиты нативно"
+  else
+    bun build src/main.ts --compile --minify \
+      --target=bun-windows-x64 --outfile "$DIST/ragana.exe"
+    warn "  иконка НЕ вшита: --windows-icon доступен только на Windows"
+    echo "  чтобы добавить, выполните на Windows или через wine:"
+    echo "    npx rcedit dist/ragana.exe \\"
+    echo "      --set-icon assets/ragana.ico \\"
+    echo "      --set-version-string ProductName ragana \\"
+    echo "      --set-file-version ${VERSION}.0"
+  fi
+  printf '  %.1f МБ\n' "$(echo "$(wc -c < "$DIST/ragana.exe") / 1048576" | bc -l)"
+}
+
+build_macos() {
+  say "сборка для macOS arm64"
+  bun build src/main.ts --compile --minify \
+    --target=bun-darwin-arm64 --outfile "$DIST/ragana-macos"
+  chmod +x "$DIST/ragana-macos"
+  # У Mach-O нет секции ресурсов, поэтому иконка живёт в бандле .app
+  sh tools/make-app.sh "$DIST/ragana-macos" "$DIST/ragana.app" || true
+  printf '  %.1f МБ\n' "$(echo "$(wc -c < "$DIST/ragana-macos") / 1048576" | bc -l)"
+}
+
+build_linux_desktop() {
+  say "ярлык для Linux"
+  # У ELF тоже нет места под иконку — её несёт .desktop-файл
+  cat > "$DIST/ragana.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=ragana
+GenericName=Локальный поиск по документам
+Comment=RAG по вашим файлам: цитаты с указанием страницы и времени
+Exec=ragana --gui
+Icon=ragana
+Terminal=true
+Categories=Utility;Office;
+Keywords=rag;search;документы;поиск;
+DESKTOP
+  cp assets/ragana.png "$DIST/ragana.png"
+  echo "  ragana.desktop + ragana.png"
+  echo "  установка:"
+  echo "    cp dist/ragana ~/.local/bin/"
+  echo "    cp dist/ragana.png ~/.local/share/icons/hicolor/256x256/apps/"
+  echo "    cp dist/ragana.desktop ~/.local/share/applications/"
+}
+
+case "$TARGET" in
+  native)  build_native ;;
+  windows) build_windows ;;
+  macos)   build_macos ;;
+  linux)   build_native; build_linux_desktop ;;
+  all)     build_native; build_windows; build_macos; build_linux_desktop ;;
+  *) echo "цель: native | windows | macos | linux | all"; exit 1 ;;
+esac
 
 echo
-echo "готово: $OUT"
-echo
-echo "Рядом с бинарём нужны (или задайте RAGANA_LIB_ROOT):"
-echo "  models/multilingual-e5-small/   модель эмбеддингов (113 МБ)"
-echo "  node_modules/onnxruntime-web/   рантайм WASM"
-echo "  node/embedder.mjs               загрузчик модели"
+ls -la "$DIST" 2>/dev/null | awk 'NR>3 {printf "  %-24s %8.1f МБ\n", $9, $5/1048576}'

@@ -4,3 +4,6 @@ models/
 build/
 dist/
 vendor/
+dist/
+assets/ragana.iconset/
+assets/png/
