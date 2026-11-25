@@ -28,7 +28,32 @@ console.log(`  core/: ${coreFiles.length} модулей`);
 for (const f of ['index.html', 'style.css', 'app.js', 'pdf-web.js']) {
   await copy(join(ROOT, 'web', f), join(dist, f));
 }
-console.log('  веб-слой: 4 файла');
+
+// 🔴 ПУТИ ИМПОРТОВ ОБЯЗАТЕЛЬНО ПЕРЕПИСАТЬ. В репозитории web/app.js
+// импортирует '../core/...', потому что ядро лежит на уровень выше. В
+// сборке раскладка ПЛОСКАЯ: core/ рядом с app.js. Без правки путь
+// '../core/' уводит ЗА ПРЕДЕЛЫ сайта, модуль не грузится
+// ('Failed to fetch dynamically imported module'), и страница
+// отрисовывается, но ни одна кнопка не работает — отказ молчаливый,
+// в консоли при клике НИЧЕГО не появляется.
+//
+// APK и Chrome-расширение делали это с самого начала
+// (tools/build-apk.sh, tools/build-extension.sh), а веб-сборка — нет.
+const appPath = join(dist, 'app.js');
+const appSrc = await Bun.file(appPath).text();
+const rewritten = (appSrc.match(/from '\.\.\//g) ?? []).length;
+// Переписываем ЛЮБОЙ путь на уровень выше, не только core/: завтра
+// появится './web/…' или другой каталог, и правило должно работать.
+const fixed = appSrc.replaceAll("from '../", "from './");
+await Bun.write(appPath, fixed);
+
+// Контроль ПОСЛЕ записи, на итоговом содержимом: проверять исходник
+// бессмысленно — там пути как раз и должны быть относительными.
+const check = await Bun.file(appPath).text();
+if (check.includes("from '../")) {
+  throw new Error('в app.js остались пути вида ../ — модуль не загрузится');
+}
+console.log(`  веб-слой: 4 файла, путей переписано: ${rewritten}`);
 
 // --- манифест PWA ---
 // Нужен, чтобы страницу можно было «установить» на телефон и открывать
