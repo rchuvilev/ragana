@@ -19,6 +19,20 @@ import tokenizer from '../models/multilingual-e5-small/tokenizer.json' with { ty
 import tokenizerConfig from '../models/multilingual-e5-small/tokenizer_config.json' with { type: 'file' };
 import specialTokens from '../models/multilingual-e5-small/special_tokens_map.json' with { type: 'file' };
 
+// Florence-2: распознавание таблиц и описание изображений.
+// 265 МБ в четырёх частях — это авторегрессионная модель, работающая
+// заметно медленнее tesseract, поэтому применяется по требованию
+// (--ocr florence), а не вместо него.
+import flVision from '../models/florence-2-base/onnx/vision_encoder_quantized.onnx' with { type: 'file' };
+import flDecoder from '../models/florence-2-base/onnx/decoder_model_merged_quantized.onnx' with { type: 'file' };
+import flEncoder from '../models/florence-2-base/onnx/encoder_model_quantized.onnx' with { type: 'file' };
+import flEmbed from '../models/florence-2-base/onnx/embed_tokens_quantized.onnx' with { type: 'file' };
+import flConfig from '../models/florence-2-base/config.json' with { type: 'file' };
+import flGenConfig from '../models/florence-2-base/generation_config.json' with { type: 'file' };
+import flPreproc from '../models/florence-2-base/preprocessor_config.json' with { type: 'file' };
+import flTokenizer from '../models/florence-2-base/tokenizer.json' with { type: 'file' };
+import flTokenizerCfg from '../models/florence-2-base/tokenizer_config.json' with { type: 'file' };
+
 // WASM-рантайм ONNX. Вшивается как ФАЙЛ, потому что onnxruntime-web
 // загружает его по пути во время работы, а не импортом — статический
 // импорт его не втянул бы.
@@ -58,6 +72,19 @@ import libOrtWebgpu from '../node_modules/onnxruntime-web/dist/ort.webgpu.bundle
 // поэтому он предварительно собирается в ОДИН файл (tools/vendor.sh):
 // копировать 21 файл и чинить пути внутри каждого — хрупко.
 import libOrtCommon from '../vendor/ort-common.mjs' with { type: 'file' };
+
+/** Файлы Florence-2 — ключи совпадают с запрашиваемыми путями. */
+export const FLORENCE_FILES: Record<string, string> = {
+  'onnx/vision_encoder_quantized.onnx': flVision,
+  'onnx/decoder_model_merged_quantized.onnx': flDecoder,
+  'onnx/encoder_model_quantized.onnx': flEncoder,
+  'onnx/embed_tokens_quantized.onnx': flEmbed,
+  'config.json': flConfig,
+  'generation_config.json': flGenConfig,
+  'preprocessor_config.json': flPreproc,
+  'tokenizer.json': flTokenizer,
+  'tokenizer_config.json': flTokenizerCfg,
+};
 
 /**
  * Файлы рантайма ONNX.

@@ -126,6 +126,7 @@ ${C.b('Модификаторы')}
   --media            расшифровывать аудио и видео (долго!)
   --asr <модель>     tiny | base | small (по умолчанию tiny)
   --lang <языки>     языки OCR, например rus+eng+deu
+  --ocr <движок>     tesseract | florence | auto (по умолчанию auto)
   --home <путь>      другой каталог рабочего места
 
 ${C.b('В пайплайне')}
@@ -220,6 +221,7 @@ async function main(): Promise<number> {
 
       const report = await runIndex(layout, embedder, {
         ocrLanguages: typeof flags.lang === 'string' ? flags.lang : 'rus+eng',
+        ocrEngine: (typeof flags.ocr === 'string' ? flags.ocr : 'auto') as any,
         media: flags.media ? 'transcribe' : 'skip',
         asrModel: (typeof flags.asr === 'string' ? flags.asr : 'tiny') as any,
         onProgress: flags.quiet ? undefined : renderProgress,

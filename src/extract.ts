@@ -19,9 +19,33 @@ import { basename, extname, join } from 'node:path';
 /** Что делать с медиа: расшифровка дорогая, решает пользователь. */
 export type MediaPolicy = 'skip' | 'transcribe';
 
+/**
+ * Движок распознавания изображений.
+ *
+ * ЗАМЕРЕНО, и это определило каскад:
+ *   | задача                  | tesseract        | Florence-2        |
+ *   |-------------------------|------------------|-------------------|
+ *   | русский текст           | точно, 0.6 с     | мусор, 91.7 с     |
+ *   | английский текст        | точно, 0.6 с     | с ошибками, 86 с  |
+ *   | таблица (87 блоков)     | плоский текст    | блоки+координаты, 176 с |
+ *   | картинка БЕЗ текста     | ПУСТО            | осмысленное описание |
+ *
+ * Florence-2 проигрывает как OCR на ЛЮБОМ языке: «Deductible is 300 euro
+ * per claim» он прочитал как «Deutscible is 30 euro per chaim». Поэтому
+ * его единственная ниша — ОПИСАНИЕ изображений, где tesseract бессилен.
+ *
+ *   tesseract — всегда и для всего текста, 66 языков
+ *   florence  — принудительно, для опытов и таблиц
+ *   auto      — tesseract, плюс ОПИСАНИЕ от Florence-2 там, где
+ *               tesseract ничего не нашёл (рекомендуется)
+ */
+export type OcrEngine = 'tesseract' | 'florence' | 'auto';
+
 export interface ExtractOptions {
   /** Языки для OCR, например 'rus+eng'. */
   ocrLanguages?: string;
+  /** Чем распознавать изображения. */
+  ocrEngine?: OcrEngine;
   /** Обрабатывать ли аудио и видео. */
   media?: MediaPolicy;
   /** Модель ASR. tiny быстрее, base точнее. */
@@ -139,6 +163,46 @@ async function pdfOcr(
   }
 }
 
+/**
+ * Распознавание с автоподбором языков.
+ *
+ * 🔴 НАБОР ЯЗЫКОВ РЕШАЕТ КАЧЕСТВО. Замер на одной картинке с английским
+ * текстом «Deductible is 300 euro per claim»:
+ *   -l eng      «Deductible is 300 euro per claim»   точно
+ *   -l rus+eng  «Deductible 15 300 еиго рег claim»   латиница подменена
+ *   -l rus      «РедисНЫе 15 300 еиго рег с/айт»     мусор
+ * То есть лишний язык в наборе ХУЖЕ, чем его отсутствие: tesseract
+ * подставляет похожие по начертанию буквы чужого алфавита.
+ *
+ * Поэтому делается два прохода: сначала широким набором — чтобы понять,
+ * какая письменность на картинке, затем узким — ради точности. Второй
+ * проход стоит те же ~0.6 с, что приемлемо против 96 с у Florence-2.
+ */
+async function ocrAdaptive(
+  path: string, requested: string,
+): Promise<{ text: string; langs: string }> {
+  const first = await $`tesseract ${path} stdout -l ${requested}`.quiet().nothrow();
+  const firstText = first.exitCode === 0 ? first.stdout.toString('utf8').trim() : '';
+
+  // Если язык задан одиночным — пользователь знает, что делает
+  if (!requested.includes('+') || firstText.length < 10) {
+    return { text: firstText, langs: requested };
+  }
+
+  const { tesseractLangs } = await import('./lang.ts');
+  const narrowed = tesseractLangs(firstText, requested);
+  if (narrowed === requested) return { text: firstText, langs: requested };
+
+  const second = await $`tesseract ${path} stdout -l ${narrowed}`.quiet().nothrow();
+  const secondText = second.exitCode === 0 ? second.stdout.toString('utf8').trim() : '';
+
+  // Берём второй результат, только если он не короче: сужение набора
+  // могло отрезать нужный язык, и тогда лучше вернуться к широкому.
+  return secondText.length >= firstText.length * 0.8
+    ? { text: secondText, langs: narrowed }
+    : { text: firstText, langs: requested };
+}
+
 // ---------- медиа ----------
 
 /** Длительность в секундах, 0 если неизвестна. */
@@ -174,6 +238,7 @@ export async function extractToMarkdown(
 ): Promise<ExtractResult> {
   const {
     ocrLanguages = 'rus+eng',
+    ocrEngine = 'auto',
     media = 'skip',
     asrModel = 'tiny',
     onProgress,
@@ -218,15 +283,53 @@ export async function extractToMarkdown(
   }
 
   if (kind === 'image') {
-    const r = await $`tesseract ${path} stdout -l ${ocrLanguages}`.quiet().nothrow();
-    const text = r.exitCode === 0 ? r.stdout.toString('utf8').trim() : '';
-    if (text.length === 0) warnings.push('OCR не нашёл текста на изображении');
-    const method = `OCR tesseract (${ocrLanguages})`;
+    let text = '';
+    let method = '';
+
+    if (ocrEngine !== 'florence') {
+      const res = await ocrAdaptive(path, ocrLanguages);
+      text = res.text;
+      method = `OCR tesseract (${res.langs})`;
+    }
+
+    // Florence-2 зовётся ТОЛЬКО за описанием и только когда tesseract
+    // ничего не нашёл. Пускать его на распознавание текста смысла нет:
+    // замер показал ошибки даже на английском при 140-кратном отставании
+    // по скорости. А вот картинку без текста он описывает осмысленно —
+    // и такой файл перестаёт молча выпадать из индекса.
+    const { florenceDecision } = await import('./lang.ts');
+    const needFlorence = ocrEngine === 'florence'
+      || (ocrEngine === 'auto' && florenceDecision(text) === 'caption');
+
+    if (needFlorence) {
+      try {
+        const { runVision } = await import('./vision.ts');
+        // Принудительный режим — пробуем и OCR, иначе только описание
+        const ocr = ocrEngine === 'florence'
+          ? await runVision(path, 'ocr', onProgress)
+          : null;
+        const caption = await runVision(path, 'caption_long', onProgress);
+        const parts = [ocr?.text.trim(), caption.text.trim()].filter(Boolean);
+        const combined = parts.join('\n\n');
+        if (combined.length > text.length) {
+          // Описание помечается явно: это НЕ текст с картинки, а пересказ
+          // её содержимого, и пользователь должен видеть разницу.
+          text = ocr?.text.trim()
+            ? combined
+            : `[описание изображения] ${combined}`;
+          method = ocr ? 'Florence-2 (текст + описание)' : 'Florence-2 (описание)';
+        }
+      } catch (e) {
+        warnings.push(`Florence-2 недоступен: ${(e as Error).message.slice(0, 80)}`);
+      }
+    }
+
+    if (text.length === 0) warnings.push('на изображении не найдено ни текста, ни описания');
     // Для одиночного изображения координата — «с. 1»: единый формат с PDF
     // позволяет цитировать то и другое одинаково.
     return {
-      markdown: header(path, method) + `## [с. 1]\n\n${text}\n`,
-      method, units: text.length > 0 ? 1 : 0, warnings,
+      markdown: header(path, method || 'нет') + `## [с. 1]\n\n${text}\n`,
+      method: method || 'нет', units: text.length > 0 ? 1 : 0, warnings,
     };
   }
 

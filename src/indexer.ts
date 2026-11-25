@@ -30,6 +30,7 @@ import type { Chunk, Embedder, Progress } from './types.ts';
 
 export interface IndexOptions {
   ocrLanguages?: string;
+  ocrEngine?: 'tesseract' | 'florence' | 'auto';
   media?: MediaPolicy;
   asrModel?: 'tiny' | 'base' | 'small';
   chunkTarget?: number;
@@ -78,6 +79,7 @@ export async function runIndex(
 ): Promise<IndexReport> {
   const {
     ocrLanguages = 'rus+eng',
+    ocrEngine = 'auto',
     media = 'skip',
     asrModel = 'tiny',
     chunkTarget = 900,
@@ -156,7 +158,7 @@ export async function runIndex(
 
       if (needsTranscript(rel)) {
         const res = await extractToMarkdown(file.abs, {
-          ocrLanguages, media, asrModel,
+          ocrLanguages, ocrEngine, media, asrModel,
           onProgress: (n) => report('extract', n),
         });
         for (const w of res.warnings) warnings.push(`${rel}: ${w}`);
