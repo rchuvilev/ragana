@@ -16,9 +16,9 @@
 // естественном языке, а фиксированные метки, которые модель обучена
 // распознавать.
 
-import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { materializeOrt, materializeLib, FLORENCE_FILES } from './assets.ts';
+import { FLORENCE_FILES } from './assets.ts';
+import { loadTransformers, serveModelFiles } from './runtime.ts';
 
 /** Режимы Florence-2, применимые к нашей задаче. */
 export type VisionTask =
@@ -43,64 +43,20 @@ export interface VisionResult {
   regions?: Array<{ text: string; box: number[] }>;
 }
 
-let cached: unknown = null;
+let cached: Record<string, unknown> | null = null;
 
 /**
  * Поднимает Florence-2.
  *
- * Обходы те же, что для эмбеддера: process.release прячется до импорта
- * (иначе библиотека выберет native-бэкенд, которого в musl нет),
- * numThreads=1 (воркер через blob: не грузится), wasmPaths как
- * file://-URL.
+ * Обходы для musl — в src/runtime.ts, единой точке для всех трёх моделей.
  */
-async function loadModel(onProgress?: (n: string) => void): Promise<any> {
+async function loadModel(onProgress?: (n: string) => void): Promise<Record<string, unknown>> {
   if (cached) return cached;
 
-  const ortDir = await materializeOrt();
-  const libPath = await materializeLib();
+  const lib = await loadTransformers();
+  serveModelFiles(lib, 'Florence-2-base/', FLORENCE_FILES);
 
-  const savedRelease = process.release;
-  // @ts-expect-error намеренная временная подмена
-  delete process.release;
-  let lib: any;
-  try {
-    lib = await import(libPath);
-  } finally {
-    // @ts-expect-error возвращаем на место
-    process.release = savedRelease;
-  }
-
-  const { AutoProcessor, AutoTokenizer, Florence2ForConditionalGeneration, env } = lib;
-
-  env.allowRemoteModels = false;
-  env.allowLocalModels = true;
-  env.localModelPath = '/models/';
-  env.backends ??= {};
-  env.backends.onnx ??= {};
-  env.backends.onnx.wasm ??= {};
-  env.backends.onnx.wasm.numThreads = 1;
-  env.backends.onnx.wasm.proxy = false;
-  env.backends.onnx.wasm.wasmPaths = pathToFileURL(ortDir + '/').href;
-
-  // Файлы модели отдаются из вшитых ресурсов через перехват fetch
-  const originalFetch = env.fetch ?? globalThis.fetch;
-  env.fetch = async (input: any, init?: any) => {
-    const url = typeof input === 'string' ? input : String(input?.url ?? '');
-    const marker = 'Florence-2-base/';
-    const idx = url.indexOf(marker);
-    if (idx >= 0) {
-      const rel = url.slice(idx + marker.length).split('?')[0] ?? '';
-      const embedded = FLORENCE_FILES[rel];
-      if (embedded) {
-        const f = Bun.file(embedded);
-        if (await f.exists()) {
-          return new Response(await f.arrayBuffer(), { status: 200 });
-        }
-      }
-      return new Response(null, { status: 404 });
-    }
-    return originalFetch(input, init);
-  };
+  const { AutoProcessor, AutoTokenizer, Florence2ForConditionalGeneration } = lib as any;
 
   onProgress?.('загрузка Florence-2 (265 МБ, первый запуск дольше)');
   const [processor, tokenizer, model] = await Promise.all([
@@ -132,7 +88,7 @@ export async function runVision(
   task: VisionTask = 'ocr',
   onProgress?: (n: string) => void,
 ): Promise<VisionResult> {
-  const { processor, tokenizer, model, lib } = await loadModel(onProgress);
+  const { processor, tokenizer, model, lib } = await loadModel(onProgress) as any;
   const { RawImage } = lib;
 
   onProgress?.(`Florence-2: ${task}`);

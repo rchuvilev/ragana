@@ -12,8 +12,7 @@
 // Если понадобится скорость — модуль заменяется на whisper.cpp (55.5k★)
 // без изменений в вызывающем коде: контракт transcribe() тот же.
 
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { loadTransformers } from './runtime.ts';
 import type { AsrSegment } from './extract.ts';
 
 export interface AsrOptions {
@@ -38,40 +37,18 @@ let cached: { model: string; pipe: unknown } | null = null;
 async function loadPipeline(model: string, onProgress?: (n: string) => void) {
   if (cached && cached.model === model) return cached.pipe;
 
-  const root = resolveRoot();
-  const libPath = join(root, 'node_modules/@huggingface/transformers/dist/transformers.web.js');
-
-  const savedRelease = process.release;
-  // @ts-expect-error намеренная временная подмена
-  delete process.release;
-  let lib: any;
-  try {
-    lib = await import(libPath);
-  } finally {
-    // @ts-expect-error возвращаем на место
-    process.release = savedRelease;
-  }
-
-  const { pipeline, env } = lib;
-  env.allowRemoteModels = true;
-  env.backends.onnx.wasm.numThreads = 1;
-  env.backends.onnx.wasm.proxy = false;
-  env.backends.onnx.wasm.wasmPaths = pathToFileURL(
-    join(root, 'node_modules/onnxruntime-web/dist/'),
-  ).href;
+  // Обходы для musl — в src/runtime.ts. Модель whisper тянется с CDN при
+  // первом использовании: вшивать её в бинарь незачем, расшифровка и так
+  // включается явным флагом и идёт минутами.
+  const lib = await loadTransformers();
+  (lib.env as Record<string, unknown>).allowRemoteModels = true;
 
   onProgress?.(`загрузка модели whisper-${model}`);
-  const pipe = await pipeline(
+  const pipe = await (lib.pipeline as any)(
     'automatic-speech-recognition', `Xenova/whisper-${model}`, { quantized: true },
   );
   cached = { model, pipe };
   return pipe;
-}
-
-function resolveRoot(): string {
-  // В скомпилированном бинаре node_modules рядом нет — модели и
-  // библиотека ищутся относительно каталога разработки, если он задан.
-  return process.env.RAGANA_LIB_ROOT ?? process.cwd();
 }
 
 /**

@@ -12,16 +12,8 @@ import { createInterface } from 'node:readline';
 import type { Layout } from './workspace.ts';
 import { RagStore } from './store.ts';
 import { humanEta } from './progress.ts';
+import { C } from './colors.ts';
 
-const C = {
-  b: (s: string) => `\x1b[1m${s}\x1b[0m`,
-  dim: (s: string) => `\x1b[2m${s}\x1b[0m`,
-  g: (s: string) => `\x1b[32m${s}\x1b[0m`,
-  y: (s: string) => `\x1b[33m${s}\x1b[0m`,
-  r: (s: string) => `\x1b[31m${s}\x1b[0m`,
-  c: (s: string) => `\x1b[36m${s}\x1b[0m`,
-  inv: (s: string) => `\x1b[7m${s}\x1b[0m`,
-};
 
 /** Путь к собственному исполняемому файлу для запуска дочернего процесса. */
 function selfCommand(): string[] {

@@ -23,6 +23,15 @@ export interface SearchOptions {
   expand?: boolean;
   merge?: boolean;
   mode?: SearchMode;
+  /**
+   * Нижний порог косинусного сходства. Ниже — считаем, что не нашли.
+   *
+   * 🔴 БЕЗ ЭТОГО ПОРОГА векторный поиск ВСЕГДА что-то возвращает:
+   * «ближайший» существует даже для бессмыслицы. E2E поймал это на
+   * запросе «квазимодокракозябра» — три цитаты и код возврата 0, то
+   * есть пайплайн считал поиск успешным и скармливал модели мусор.
+   */
+  minScore?: number;
 }
 
 export interface SearchResult {
@@ -87,6 +96,17 @@ export class Searcher {
   async search(prompt: string, opts: SearchOptions = {}): Promise<SearchResult> {
     const {
       k = 5, pool = 20, expand = true, merge = true, mode = 'hybrid',
+      // 🔴 ПОРОГ ПОДОБРАН ЗАМЕРОМ, а не на глаз. E5 выдаёт ВЫСОКИЕ
+      // сходства даже для бессмыслицы — это свойство модели, а не
+      // ошибка. Замер на 5 осмысленных и 5 бессмысленных запросах:
+      //   осмысленные  0.825 … 0.885  (минимум 0.825)
+      //   бессмыслица  0.769 … 0.796  (максимум 0.796)
+      // Разрыв всего 0.028, середина — 0.811.
+      //
+      // ⚠️ Разрыв УЗКИЙ, и на другом корпусе границы сместятся. Поэтому
+      // порог вынесен в параметр: --min-score позволяет его подвинуть,
+      // не пересобирая. Жёсткая константа здесь была бы ловушкой.
+      minScore = 0.811,
     } = opts;
     const t0 = Date.now();
 
@@ -130,7 +150,12 @@ export class Searcher {
       }
       if (mode !== 'lexical' && this.vectors.size > 0) {
         const [qv] = await this.embedder.embed([asQuery(query)]);
-        if (qv) lists.push(this.vectors.search(qv, pool));
+        if (qv) {
+          // Отсекаем по АБСОЛЮТНОМУ сходству до слияния: RRF работает с
+          // рангами и после него разницу между 0.87 и 0.69 уже не видно.
+          lists.push(this.vectors.search(qv, pool)
+            .filter((h) => h.score >= minScore));
+        }
       }
     }
 

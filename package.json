@@ -9,7 +9,7 @@
   "scripts": {
     "test": "bun test test/*.test.ts && node --test test/*.test.mjs",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm test",
+    "check": "npm run typecheck && npm test && npm run test:e2e",
     "bench": "node test/bench.mjs && node test/hashbench.mjs",
     "vendor": "sh tools/vendor.sh",
     "icons": "sh tools/icons.sh",
@@ -22,7 +22,8 @@
     "build:plugin": "bun scripts/build-plugin.ts",
     "build:all": "bun scripts/build-all.ts",
     "plugin:check": "bun scripts/build-plugin.ts --check",
-    "verify": "sh tools/verify-standalone.sh"
+    "verify": "sh tools/verify-standalone.sh",
+    "test:e2e": "sh test/e2e.sh"
   },
   "keywords": [],
   "author": "",
