@@ -1,0 +1,80 @@
+name: Публикация веб-версии
+
+# Собирает dist-webpage и публикует на GitHub Pages.
+#
+# Сборка идёт в CI, а не коммитом готовых файлов: иначе dist-webpage
+# пришлось бы держать в репозитории, и он расходился бы с исходниками
+# при каждой правке core/ — ошибку такого рода замечают поздно.
+
+on:
+  push:
+    branches: [main]
+    # Пересобираем только когда менялось то, что попадает на страницу
+    paths:
+      - 'core/**'
+      - 'web/**'
+      - 'scripts/build-webpage.ts'
+      - 'scripts/common.ts'
+      - 'assets/icon-source.jpg'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Параллельные публикации отменяют друг друга: на Pages имеет смысл
+# только последняя версия.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: ImageMagick для иконок PWA
+        run: sudo apt-get update && sudo apt-get install -y imagemagick
+
+      - name: Сборка
+        run: bun scripts/build-webpage.ts
+
+      - name: Проверка состава
+        # Доказываем, что собралось ожидаемое, а не пустая папка:
+        # actions/upload-pages-artifact молча примет и её.
+        run: |
+          set -e
+          for f in index.html app.js style.css pdf-web.js \
+                   manifest.webmanifest sw.js core/engine.mjs core/vector.mjs; do
+            test -s "dist-webpage/$f" || { echo "нет файла: $f"; exit 1; }
+          done
+          COUNT=$(find dist-webpage -type f | wc -l)
+          echo "файлов: $COUNT"
+          test "$COUNT" -ge 15 || { echo "слишком мало файлов"; exit 1; }
+          grep -q 'manifest.webmanifest' dist-webpage/index.html \
+            || { echo "манифест не подключён к странице"; exit 1; }
+          grep -q "serviceWorker" dist-webpage/index.html \
+            || { echo "service worker не подключён"; exit 1; }
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist-webpage
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
