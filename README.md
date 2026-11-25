@@ -1,5 +1,8 @@
 # ragana
 
+**[Веб-версия → rchuvilev.github.io/ragana](https://rchuvilev.github.io/ragana/)** ·
+[исходники](https://github.com/rchuvilev/ragana)
+
 Локальный RAG по папке с документами. Кидаете файлы — получаете ответы
 с дословными цитатами и указанием источника. Ничего не уходит с устройства.
 
@@ -83,11 +86,37 @@ Android SAF сохраняет mtime исходника при копирова�
 несуществующий фрагмент и выход за границы; при любой ошибке — откат к
 обычной выдаче. Галлюцинация в фактах структурно невозможна.
 
-## Сборка оболочек
+## Сборка
+
+| команда | результат | размер |
+|---|---|---|
+| `npm run build:mac:intel` | `dist-mac-intel/` | ~520 МБ |
+| `npm run build:mac:silicon` | `dist-mac-silicon/` | ~520 МБ |
+| `npm run build:win` | `dist-win/` | ~520 МБ |
+| `npm run build:linux` | `dist-linux/` | ~520 МБ |
+| `npm run build:webpage` | `dist-webpage/` | 0.3 МБ |
+| `npm run build:npm` | `dist-npm/` | бинари + запускатель |
+| `npm run build:plugin` | `dist-plugin/` | плагин + скилл + MCP |
+| `npm run build:all` | всё сразу | — |
+
+Бинарь **самодостаточен**: модель эмбеддингов, Florence-2 и WASM-рантайм
+внутри. Проверяется не на словах:
 
 ```sh
-sh tools/build-apk.sh         # → ragana.apk (59 КБ)
-sh tools/build-extension.sh   # → extension/dist (14.9 МБ)
+npm run verify   # прячет models/ и node_modules/, гоняет 5 сценариев
+```
+
+## Подключение к агентам
+
+Общий знаменатель всех клиентов — MCP поверх stdio:
+
+```sh
+cd dist-plugin
+sh install.sh claude    # Claude Code
+sh install.sh codex     # Codex CLI
+sh install.sh cursor    # Cursor
+sh install.sh vscode    # VS Code Copilot
+sh install.sh print     # команда для любого другого клиента
 ```
 
 APK собирается **без Gradle**, прямо на телефоне. `aapt2` и `zipalign`
