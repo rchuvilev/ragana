@@ -142,12 +142,8 @@ ${C.b('В пайплайне')}
  * её для повторяющихся текстов.
  */
 async function makeEmbedder(dbFile: string): Promise<Embedder> {
-  const root = process.env.RAGANA_LIB_ROOT ?? process.cwd();
-  const { createEmbedder } = await import(
-    `${root}/node/embedder.mjs`
-  ) as { createEmbedder: (dir: string) => Promise<Embedder> };
-
-  const raw = await createEmbedder(`${root}/models/multilingual-e5-small`);
+  const { createEmbedder } = await import('./embedder.ts');
+  const raw = await createEmbedder();
   const { EmbeddingCache, withCache } = await import('./cache.ts');
   const cache = new EmbeddingCache(dbFile, 'multilingual-e5-small', raw.dim);
   return withCache(raw, cache);
