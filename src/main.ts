@@ -50,7 +50,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const rest: string[] = [];
 
   const BOOLEAN = new Set([
-    'json', 'quiet', 'no-expand', 'help', 'version', 'media', 'force',
+    'json', 'quiet', 'no-expand', 'help', 'version', 'media', 'force', 'cooc',
   ]);
   const VALUED = new Set(['k', 'mode', 'asr', 'lang', 'home', 'pool', 'ocr']);
   const unknown: string[] = [];
@@ -123,6 +123,8 @@ ${C.b('Модификаторы')}
   --json             машиночитаемый вывод (для пайплайна)
   --k <N>            сколько цитат (по умолчанию 5)
   --mode <режим>     hybrid | vector | lexical
+  --cooc             расширять запрос словарём из корпуса
+                     (на малых корпусах ухудшает — см. docs)
   --no-expand        не расширять запрос синонимами
   --media            расшифровывать аудио и видео (долго!)
   --asr <модель>     tiny | base | small (по умолчанию tiny)
@@ -260,6 +262,13 @@ async function main(): Promise<number> {
         const { Searcher, sourceOf } = await import('./search.ts');
         const searcher = new Searcher(store, embedder);
         searcher.setDocsDir(layout.docsDir);
+        // Словарь из корпуса — по флагу: на малом корпусе он УХУДШАЕТ
+        // ранжирование (замерено: MRR 0.89 -> 0.85), потому что
+        // статистика не отличает термин от служебного слова.
+        if (flags.cooc) {
+          const { Cooccurrence } = await import('./cooccurrence.ts');
+          searcher.setCooccurrence(new Cooccurrence(layout.dbFile));
+        }
 
         const res = await searcher.search(prompt, {
           k: Number(flags.k ?? 5),
@@ -277,7 +286,8 @@ async function main(): Promise<number> {
 
         if (flags.json) {
           console.log(JSON.stringify({
-            prompt: res.prompt, query: res.query, added: res.added,
+            prompt: res.prompt, query: res.query, queries: res.queries,
+            added: res.added,
             tookMs: res.tookMs, log: logFile,
             citations: res.citations.map((c) => ({
               path: c.chunk.path,
@@ -291,6 +301,11 @@ async function main(): Promise<number> {
           return res.citations.length > 0 ? 0 : 4;
         }
 
+        // Показываем разбиение: пользователь должен видеть, что вопрос
+        // искался по частям, иначе выдача выглядит необъяснимой.
+        if (res.queries.length > 1) {
+          console.log(C.dim(`разбито на ${res.queries.length}: ${res.queries.join(' | ')}`));
+        }
         if (res.added.length) console.log(C.dim(`+ ${res.added.join(' ')}`));
         if (res.citations.length === 0) {
           console.log(C.y('ничего не найдено'));

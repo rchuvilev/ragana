@@ -26,6 +26,7 @@ import {
   describeDiff, type Layout, type Registry,
 } from './workspace.ts';
 import { RagStore } from './store.ts';
+import { Cooccurrence } from './cooccurrence.ts';
 import type { Chunk, Embedder, Progress } from './types.ts';
 
 export interface IndexOptions {
@@ -90,6 +91,9 @@ export async function runIndex(
   const t0 = Date.now();
   const warnings: string[] = [];
   const store = new RagStore(layout.dbFile, embedder.dim);
+  // Словарь совместной встречаемости строится ИЗ КОРПУСА — он заменяет
+  // захардкоженные правила расширения, покрывавшие лишь 50% запросов.
+  const cooc = new Cooccurrence(layout.dbFile);
 
   try {
     // Смена модели обесценивает все векторы: они из другого пространства.
@@ -246,6 +250,7 @@ export async function runIndex(
 
       report('store', 'запись');
       store.putChunks(rel, kept, vectors);
+      for (const c of kept) cooc.add(c.text);
       store.putFile({
         rel, hash: current.get(rel)!, size: file.size, mtime: file.mtime,
         kind: kindOf(rel), method, units,
@@ -261,6 +266,7 @@ export async function runIndex(
     // прошлый запуск прервали на середине.
     for (const rel of diff.same) registry[rel] = current.get(rel)!;
 
+    cooc.flush();
     await saveRegistry(layout.registryFile, registry);
     onProgress?.({ phase: 'done', done: toIndex.length, total: toIndex.length });
 
@@ -274,6 +280,7 @@ export async function runIndex(
       tookMs: Date.now() - t0,
     };
   } finally {
+    cooc.close();
     store.close();
   }
 }

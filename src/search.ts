@@ -7,11 +7,12 @@
 
 import { VectorStore } from '../core/vector.mjs';
 import { BM25, stem } from '../core/lexical.mjs';
-import { rrf, expandQuery, asQuery } from '../core/fusion.mjs';
+import { rrf, expandQuery, asQuery, splitQuestions } from '../core/fusion.mjs';
 import { link, mergeAdjacent, dropped } from '../core/cite.mjs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RagStore } from './store.ts';
+import { Cooccurrence } from './cooccurrence.ts';
 import type { Chunk, Citation, Embedder } from './types.ts';
 
 export type SearchMode = 'hybrid' | 'vector' | 'lexical';
@@ -26,7 +27,10 @@ export interface SearchOptions {
 
 export interface SearchResult {
   prompt: string;
+  /** Итоговый запрос (первый из подзапросов — для совместимости). */
   query: string;
+  /** Все подзапросы: составной вопрос разбивается на части. */
+  queries: string[];
   added: string[];
   citations: Citation[];
   dropped: string[];
@@ -48,6 +52,13 @@ export class Searcher {
 
   /** Корень документов — нужен, чтобы восстановить текст склеенных цитат. */
   private docsDir: string | null = null;
+  /** Словарь из корпуса; null, если ещё не построен. */
+  private cooc: Cooccurrence | null = null;
+
+  /** Подключает словарь совместной встречаемости. */
+  setCooccurrence(c: Cooccurrence): void {
+    this.cooc = c;
+  }
 
   setDocsDir(dir: string): void {
     this.docsDir = dir;
@@ -79,36 +90,70 @@ export class Searcher {
     } = opts;
     const t0 = Date.now();
 
-    const exp = expand
-      ? expandQuery(prompt, stem)
-      : { query: prompt, added: [] as string[] };
+    // 🔴 СОСТАВНОЙ ВОПРОС РАЗБИВАЕТСЯ НА ЧАСТИ.
+    // «Какая франшиза и когда платить» — два разных вопроса, и единый
+    // эмбеддинг такого запроса оказывается ПОСЕРЕДИНЕ между темами, не
+    // попадая ни в одну. Каждая часть ищется отдельно, а результаты
+    // сливаются одним RRF — пользователь получает единый список.
+    const parts = splitQuestions(prompt);
 
-    const lex = mode === 'vector' ? [] : this.bm25.search(exp.query, pool);
+    const queries: string[] = [];
+    const added: string[] = [];
+    /** Списки попаданий от всех подзапросов — вход для общего слияния. */
+    const lists: Array<Array<{ index: number; id: string; score: number }>> = [];
 
-    let vec: Array<{ index: number; id: string; score: number }> = [];
-    if (mode !== 'lexical' && this.vectors.size > 0) {
-      const [qv] = await this.embedder.embed([asQuery(exp.query)]);
-      if (qv) vec = this.vectors.search(qv, pool);
+    for (const part of parts) {
+      const exp = expand
+        ? expandQuery(part, stem)
+        : { query: part, added: [] as string[] };
+
+      // Словарь из корпуса дополняет эвристику: правила знают только свой
+      // домен (страховка, кадры), а словарь — тот, что у пользователя.
+      // Порядок важен: сначала правила, потом корпус — правила точнее,
+      // когда срабатывают, но срабатывают лишь в половине случаев.
+      let query = exp.query;
+      const partAdded = [...exp.added];
+      if (expand && this.cooc) {
+        for (const t of this.cooc.expand(part)) {
+          if (!partAdded.includes(t)) partAdded.push(t);
+        }
+        if (partAdded.length > exp.added.length) {
+          query = `${exp.query} ${partAdded.slice(exp.added.length).join(' ')}`;
+        }
+      }
+
+      queries.push(query);
+      for (const a of partAdded) if (!added.includes(a)) added.push(a);
+
+      if (mode !== 'vector') {
+        lists.push(this.bm25.search(query, pool));
+      }
+      if (mode !== 'lexical' && this.vectors.size > 0) {
+        const [qv] = await this.embedder.embed([asQuery(query)]);
+        if (qv) lists.push(this.vectors.search(qv, pool));
+      }
     }
 
-    const fused = rrf([lex, vec], { limit: Math.max(k * 3, pool) });
+    // Единый RRF по всем спискам сразу: фрагмент, найденный несколькими
+    // подзапросами, поднимается — и это правильно, он отвечает на
+    // большую часть исходного вопроса.
+    const fused = rrf(lists, { limit: Math.max(k * 3, pool) });
     const lost = dropped(fused, this.byId);
     let cites = link(fused, this.byId, { limit: merge ? k * 2 : k });
 
     if (merge) {
-      // 🔴 mergeAdjacent ОБНУЛЯЕТ text: склеенный фрагмент описан только
-      // интервалом [start, end), а текст полагается восстановить из
-      // исходника. Без этого шага первая цитата приходила ПУСТОЙ — ровно
-      // то, что показал --json (len=0). Восстанавливаем по координатам,
-      // поэтому цитата остаётся дословной вырезкой.
+      // mergeAdjacent ОБНУЛЯЕТ text: склеенный фрагмент описан только
+      // интервалом [start, end), а текст восстанавливается из исходника.
+      // Без этого шага первая цитата приходила ПУСТОЙ (видно в --json).
       const merged = mergeAdjacent(cites).slice(0, k);
       cites = await this.rehydrate(merged);
     }
 
     return {
       prompt,
-      query: exp.query,
-      added: exp.added,
+      query: queries[0] ?? prompt,
+      queries,
+      added,
       citations: cites as Citation[],
       dropped: lost,
       tookMs: Date.now() - t0,
