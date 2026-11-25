@@ -25,7 +25,7 @@ for (const f of coreFiles) {
 console.log(`  core/: ${coreFiles.length} модулей`);
 
 // --- веб-слой ---
-for (const f of ['index.html', 'style.css', 'app.js', 'pdf-web.js', 'icon.png']) {
+for (const f of ['index.html', 'style.css', 'app.js', 'pdf-web.js', 'ui.js', 'icon.png']) {
   await copy(join(ROOT, 'web', f), join(dist, f));
 }
 
@@ -53,7 +53,7 @@ const check = await Bun.file(appPath).text();
 if (check.includes("from '../")) {
   throw new Error('в app.js остались пути вида ../ — модуль не загрузится');
 }
-console.log(`  веб-слой: 5 файлов, путей переписано: ${rewritten}`);
+console.log(`  веб-слой: 6 файлов, путей переписано: ${rewritten}`);
 
 // --- манифест PWA ---
 // Нужен, чтобы страницу можно было «установить» на телефон и открывать
@@ -97,7 +97,7 @@ await Bun.write(join(dist, 'sw.js'), `// ragana ${ver}
 const CACHE = 'ragana-${ver}';
 const ASSETS = [
   './', './index.html', './style.css', './app.js', './pdf-web.js',
-  './manifest.webmanifest', './icon.png',
+  './manifest.webmanifest', './icon.png', './ui.js',
 ${coreFiles.map((f) => `  './core/${f}',`).join('\n')}
 ];
 
@@ -148,7 +148,10 @@ await Bun.write(htmlPath, html);
 // --- проверка: внешних ссылок быть не должно, кроме CDN модели ---
 const appJs = await Bun.file(join(dist, 'app.js')).text();
 const externals = [...appJs.matchAll(/https?:\/\/[^'"`\s)]+/g)].map((m) => m[0]);
-const unexpected = externals.filter((u) => !u.includes('cdn.jsdelivr.net'));
+// esm.sh добавлен: React тянется оттуда как ESM, без шага сборки
+const unexpected = externals.filter(
+  (u) => !u.includes('cdn.jsdelivr.net') && !u.includes('esm.sh'),
+);
 if (unexpected.length > 0) {
   console.log(C.y(`  внешние ссылки: ${unexpected.slice(0, 3).join(', ')}`));
 }

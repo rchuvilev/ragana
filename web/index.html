@@ -51,24 +51,10 @@
     <div id="diff" class="muted small"></div>
   </section>
 
-  <section id="ask" class="card hidden">
-    <div class="ask-row">
-      <input id="q" type="search" placeholder="Задайте вопрос по документам" autocomplete="off">
-      <button id="btn-ask" class="primary">Найти</button>
-    </div>
-    <div class="opts muted small">
-      <label><input type="checkbox" id="opt-expand" checked> расширять запрос</label>
-      <label>режим
-        <select id="opt-mode">
-          <option value="vector">смысл</option>
-          <option value="hybrid" selected>смысл + слова</option>
-          <option value="lexical">только слова</option>
-        </select>
-      </label>
-    </div>
-  </section>
-
-  <section id="results"></section>
+  <!-- Панель поиска и вывод цитат монтирует React (web/ui.js).
+       Выбор папки и индексация остались на обычном DOM: переписывать
+       работающее ради единообразия незачем. -->
+  <div id="search-root" class="hidden"></div>
 </main>
 
 <div id="toast" class="toast hidden"></div>

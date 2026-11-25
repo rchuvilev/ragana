@@ -11,6 +11,7 @@ import { VectorStore } from '../core/vector.mjs';
 import { hashBytes, entry } from '../core/snapshot.mjs';
 import { detect, isSupported, parserVersionFor, formatInfo } from '../core/formats.mjs';
 import { sourceLabel } from '../core/cite.mjs';
+import { mountSearch } from './ui.js';
 import { Store } from '../core/store.mjs';
 
 const $ = (id) => /** @type {any} */ (document.getElementById(id));
@@ -21,10 +22,10 @@ const ui = {
   fileInput: $('file-input'), fallbackNote: $('fallback-note'),
   index: $('btn-index'), reset: $('btn-reset'),
   indexTop: $('btn-index-top'), resetTop: $('btn-reset-top'),
+  searchRoot: $('search-root'),
   statFiles: $('stat-files'), statChunks: $('stat-chunks'), statDir: $('stat-dir'),
   progress: $('progress'), bar: $('bar'), progressText: $('progress-text'),
-  diff: $('diff'), q: $('q'), askBtn: $('btn-ask'),
-  expand: $('opt-expand'), mode: $('opt-mode'), toast: $('toast'),
+  diff: $('diff'), toast: $('toast'),
 };
 
 /** @type {{engine: Engine|null, store: Store|null, dirHandle: any, root: string, files: Map<string, any>}} */
@@ -254,53 +255,35 @@ function refreshStats() {
   ui.statChunks.textContent = String(e.chunkCount);
   ui.statDir.textContent = state.root;
   ui.status.classList.remove('hidden');
-  ui.ask.classList.toggle('hidden', e.chunkCount === 0);
+  // Панель поиска появляется только когда есть что искать
+  ui.searchRoot.classList.toggle('hidden', e.chunkCount === 0);
   ui.setup.classList.add('hidden');
   syncTopButtons();
+  mountSearchOnce();
 }
 
-/** @param {string} text @param {string[]} terms */
-function highlight(text, terms) {
-  if (terms.length === 0) return escapeHtml(text);
-  const safe = terms
-    .filter((t) => t.length > 3)
-    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  if (safe.length === 0) return escapeHtml(text);
-  // Граница слова через \p{L}, а НЕ \b: \b определён через [A-Za-z0-9_]
-  // и с кириллицей не работает (проверено замером).
-  const re = new RegExp(`(?:^|[^\\p{L}])((?:${safe.join('|')})\\p{L}*)`, 'giu');
-  let out = '';
-  let last = 0;
-  for (const m of text.matchAll(re)) {
-    const idx = (m.index ?? 0) + m[0].length - (m[1] ?? '').length;
-    out += escapeHtml(text.slice(last, idx)) + '<mark>' + escapeHtml(m[1] ?? '') + '</mark>';
-    last = idx + (m[1] ?? '').length;
-  }
-  return out + escapeHtml(text.slice(last));
+/** React монтируется один раз: повторный createRoot на том же узле — ошибка. */
+let searchUi = null;
+function mountSearchOnce() {
+  if (searchUi) return;
+  searchUi = mountSearch(ui.searchRoot, {
+    async onSearch(query, opts) {
+      const e = state.engine;
+      if (!e) throw new Error('движок не готов');
+      return e.search(query, {
+        k: 5,
+        expand: opts.expand,
+        mode: opts.mode,
+      }).then(async (r) => {
+        await saveSearchHistory(query, r.citations);
+        return r;
+      });
+    },
+  });
 }
 
-/** @param {string} s */
-function escapeHtml(s) {
-  return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] ?? c));
-}
 
-/** @param {any[]} citations @param {string[]} terms @param {number} ms */
-function renderResults(citations, terms, ms) {
-  if (citations.length === 0) {
-    ui.results.innerHTML = '<div class="card muted">Ничего не найдено</div>';
-    return;
-  }
-  const label = { hybrid: 'смысл + слова', vector: 'смысл', lexical: 'слова' };
-  ui.results.innerHTML = citations.map((c) => `
-    <article class="hit ${c.via}">
-      <div class="hit-head">
-        <span class="hit-src">${escapeHtml(sourceLabel(c.chunk))}</span>
-        <span class="hit-meta">${label[c.via]} · ${c.score.toFixed(4)}</span>
-      </div>
-      <div class="hit-text">${highlight(c.chunk.text, terms)}</div>
-    </article>
-  `).join('') + `<div class="muted small" style="padding:0 4px">${citations.length} цитат за ${Math.round(ms)} мс</div>`;
-}
+
 
 // ---------- действия ----------
 
@@ -392,44 +375,16 @@ async function runIndex() {
       (skipped.length ? ` · пропущено ${skipped.length}` : '');
     toast('индекс обновлён');
   } catch (err) {
-    toast(String(/** @type {Error} */ (err).message ?? err), true);
-  } finally {
-    ui.index.disabled = false;
-    ui.progress.classList.add('hidden');
-    ui.bar.style.width = '0';
-  }
-}
-
-async function runAsk() {
-  const e = state.engine;
-  const q = ui.q.value.trim();
-  if (!e || !q) return;
-  ui.askBtn.disabled = true;
-  try {
-    const t0 = performance.now();
-    const r = await e.search(q, {
-      k: 5,
-      expand: ui.expand.checked,
-      mode: ui.mode.value,
-    });
-    renderResults(r.citations, [...q.split(/\s+/), ...r.added], performance.now() - t0);
-    await saveSearchHistory(q, r.citations);
-  } catch (err) {
-    toast(String(/** @type {Error} */ (err).message ?? err), true);
-  } finally {
-    ui.askBtn.disabled = false;
-  }
-}
-
+    toast(String(
 async function runReset() {
   if (!state.store) return;
   await state.store.clear();
   state.engine = null;
   state.files.clear();
-  ui.results.innerHTML = '';
+  searchUi?.clear();
   ui.diff.textContent = '';
   ui.status.classList.add('hidden');
-  ui.ask.classList.add('hidden');
+  ui.searchRoot.classList.add('hidden');
   ui.setup.classList.remove('hidden');
   syncTopButtons();
   toast('индекс сброшен');
@@ -444,10 +399,6 @@ ui.reset.addEventListener('click', runReset);
 // Те же действия из шапки: доступны, не прокручивая страницу
 ui.indexTop.addEventListener('click', runIndex);
 ui.resetTop.addEventListener('click', runReset);
-ui.askBtn.addEventListener('click', runAsk);
-ui.q.addEventListener('keydown', (/** @type {KeyboardEvent} */ ev) => {
-  if (ev.key === 'Enter') runAsk();
-});
 ui.files.addEventListener('click', () => ui.fileInput.click());
 ui.fileInput.addEventListener('change', async () => {
   const list = /** @type {FileList} */ (ui.fileInput.files);

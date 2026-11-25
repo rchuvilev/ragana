@@ -158,3 +158,26 @@ select {
   z-index: 50;
 }
 .toast.err { background: #40232a; color: #ffc9c9; }
+
+/* Многострочное поле запроса: вопрос бывает длинным, и в однострочном
+   input его не видно целиком. */
+.prompt {
+  font: inherit;
+  width: 100%;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 11px 14px;
+  resize: vertical;
+  min-height: 64px;
+  outline: none;
+  margin-bottom: 10px;
+}
+.prompt:focus { border-color: var(--accent); }
+.prompt::placeholder { color: var(--muted); }
+
+.ask-row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
+.ask-row label { display: flex; gap: 6px; align-items: center; }
+
+.split-note { padding: 0 4px 8px; }
