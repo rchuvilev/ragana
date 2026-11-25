@@ -38,6 +38,7 @@
     "test/strata-probe.mjs",
     "test/bench.mjs",
     "test/hashbench.mjs",
-    "test/eval.mjs"
+    "test/eval.mjs",
+    "vendor"
   ]
 }

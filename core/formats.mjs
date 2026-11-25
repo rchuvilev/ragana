@@ -62,6 +62,15 @@ const EXT_MAP = {
   jpg: 'jpeg', jpeg: 'jpeg', png: 'png', gif: 'gif', bmp: 'bmp',
   webp: 'webp', heic: 'heic', heif: 'heic', tif: 'tiff', tiff: 'tiff',
   docx: 'zip', epub: 'zip',
+  // 🔴 Аудио и видео ЗНАЕТ ядро, а не только src/extract.ts. Раньше их
+  // здесь не было, и веб-версия классифицировала mp3 как 'unknown' —
+  // то есть вместо внятного «расшифровка доступна в десктопной версии»
+  // пользователь получал «формат не поддерживается». Расхождение между
+  // ядром и платформенным слоем: одна таблица форматов, а не две.
+  mp3: 'audio', wav: 'audio', m4a: 'audio', flac: 'audio', ogg: 'audio',
+  opus: 'audio', aac: 'audio', wma: 'audio', aiff: 'audio',
+  mp4: 'video', mkv: 'video', mov: 'video', avi: 'video', webm: 'video',
+  m4v: 'video', wmv: 'video', flv: 'video', mpg: 'video', mpeg: 'video',
 };
 
 /**
@@ -106,6 +115,8 @@ export const KIND = {
   text: 'text',     // читается напрямую
   pdf: 'pdf',       // слой текста, иначе OCR постранично
   image: 'image',   // только OCR
+  audio: 'audio',   // расшифровка речи
+  video: 'video',   // дорожка -> расшифровка речи
   archive: 'archive',
   unknown: 'unknown',
 };
@@ -125,6 +136,8 @@ export const REGISTRY = {
   webp:  { kind: KIND.image,   parser: 'image',  parserVersion: 1, ocr: true },
   heic:  { kind: KIND.image,   parser: 'image',  parserVersion: 1, ocr: true },
   tiff:  { kind: KIND.image,   parser: 'image',  parserVersion: 1, ocr: true },
+  audio: { kind: KIND.audio,   parser: 'asr',    parserVersion: 1, ocr: false },
+  video: { kind: KIND.video,   parser: 'asr',    parserVersion: 1, ocr: false },
   zip:   { kind: KIND.archive, parser: null,     parserVersion: 0, ocr: false },
   unknown: { kind: KIND.unknown, parser: null,   parserVersion: 0, ocr: false },
 };

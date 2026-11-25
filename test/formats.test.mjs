@@ -110,3 +110,16 @@ test('needsReparse: всё совпало -> НЕ разбирать', () => {
   const prev = { hash: 'H', parserVersion: parserVersionFor('pdf') };
   assert.equal(needsReparse({ hash: 'H', format: 'pdf' }, prev), false);
 });
+
+test('🔴 ядро знает аудио и видео (расхождение с платформой)', () => {
+  // Раньше эти форматы были ТОЛЬКО в src/extract.ts, и веб-версия
+  // классифицировала mp3 как 'unknown' — вместо внятного «расшифровка
+  // доступна в десктопной версии» пользователь видел «формат не
+  // поддерживается». Должна быть ОДНА таблица форматов, а не две.
+  assert.equal(detect('запись.mp3', null), 'audio');
+  assert.equal(detect('лекция.mp4', null), 'video');
+  assert.equal(formatInfo('audio').kind, KIND.audio);
+  assert.equal(formatInfo('video').kind, KIND.video);
+  assert.equal(isSupported('audio'), true);
+  assert.equal(isSupported('video'), true);
+});

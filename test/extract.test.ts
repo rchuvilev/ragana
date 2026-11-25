@@ -125,3 +125,30 @@ test('неподдерживаемый формат сообщает о себе
   expect(r.units).toBe(0);
   expect(r.warnings[0]).toContain('не поддерживается');
 });
+
+test('🔴 таблицы форматов ядра и платформы СОГЛАСОВАНЫ', async () => {
+  // Страж против расхождения: аудио и видео однажды были ТОЛЬКО в
+  // src/extract.ts, и веб-версия классифицировала mp3 как 'unknown' —
+  // вместо внятного «расшифровка доступна в десктопной версии»
+  // пользователь видел «формат не поддерживается».
+  //
+  // Тест живёт в Bun-наборе, а не в node:test: последний не умеет
+  // импортировать .ts ('Unknown file extension .ts').
+  const { detect, formatInfo } = await import('../core/formats.mjs');
+  const samples = [
+    'a.txt', 'a.md', 'a.csv', 'a.html',
+    'a.pdf',
+    'a.png', 'a.jpg', 'a.webp', 'a.heic',
+    'a.mp3', 'a.wav', 'a.flac',
+    'a.mp4', 'a.mkv', 'a.webm',
+  ];
+  const mismatched: string[] = [];
+  for (const name of samples) {
+    const platform = kindOf(name);
+    const core = formatInfo(detect(name, null)).kind;
+    if (platform !== core) {
+      mismatched.push(`${name}: платформа=${platform} ядро=${core}`);
+    }
+  }
+  expect(mismatched).toEqual([]);
+});

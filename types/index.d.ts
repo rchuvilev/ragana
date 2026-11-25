@@ -8,10 +8,12 @@
 export type Format =
   | 'text' | 'pdf'
   | 'jpeg' | 'png' | 'gif' | 'bmp' | 'webp' | 'heic' | 'tiff'
+  | 'audio' | 'video'
   | 'zip' | 'unknown';
 
 /** Группа обработки: как файл превращается в текст. */
-export type Kind = 'text' | 'pdf' | 'image' | 'archive' | 'unknown';
+export type Kind =
+  | 'text' | 'pdf' | 'image' | 'audio' | 'video' | 'archive' | 'unknown';
 
 /** Нужен ли OCR: да / нет / только если нет текстового слоя. */
 export type OcrMode = boolean | 'fallback';

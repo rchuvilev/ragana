@@ -149,13 +149,41 @@ function makeReader(found) {
     if (info.kind === 'text') return new TextDecoder('utf-8').decode(bytes);
     if (info.kind === 'pdf') {
       const { extractPdfText, looksEmpty } = await import('./pdf-web.js');
-      const text = extractPdfText(bytes);
+      // 🔴 AWAIT ОБЯЗАТЕЛЕН: браузерная версия извлечения асинхронна
+      // (DecompressionStream), и без await в text попадал Promise.
+      // String(Promise) = '[object Promise]' — ровно 15 символов, что
+      // короче порога looksEmpty, поэтому КАЖДЫЙ PDF отвергался как
+      // «скан без текстового слоя». Отказ молчаливый: сообщение звучало
+      // правдоподобно, и дефект выглядел как ограничение формата.
+      const text = await extractPdfText(bytes);
       if (looksEmpty(text)) {
-        throw new Error(`${path}: нет текстового слоя, нужен OCR`);
+        throw new Error(
+          `${path}: в PDF нет текстового слоя (похоже на скан). `
+          + `Распознавание картинок доступно в десктопной версии.`,
+        );
       }
       return text;
     }
-    throw new Error(`${path}: формат ${format} пока не поддерживается`);
+
+    if (info.kind === 'image') {
+      // Распознать текст на картинке в браузере нечем: tesseract — это
+      // системная утилита, а tesseract.js потянул бы 5 МБ WASM плюс
+      // языковые модели по 2-15 МБ каждая. Отказываем ЧЕСТНО, с
+      // указанием, где это работает, вместо молчаливого пропуска.
+      throw new Error(
+        `${path}: распознавание текста на изображениях доступно только `
+        + `в десктопной версии (нужен tesseract)`,
+      );
+    }
+
+    if (info.kind === 'audio' || info.kind === 'video') {
+      throw new Error(
+        `${path}: расшифровка аудио и видео доступна только в десктопной `
+        + `версии (нужен ffmpeg)`,
+      );
+    }
+
+    throw new Error(`${path}: формат ${format} не поддерживается`);
   };
 }
 
