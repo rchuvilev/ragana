@@ -18,7 +18,9 @@ if [ -n "$BIN" ]; then
   RUN="$BIN"
 else
   RUN="bun run $ROOT/src/main.ts"
-  export RAGANA_LIB_ROOT="$ROOT"
+  # RAGANA_LIB_ROOT больше не нужен: модель и рантайм вшиты через
+  # import ... with { type: 'file' }, и в режиме разработки те же
+  # импорты отдают пути к файлам на диске.
 fi
 export RAGANA_HOME="$WORK"
 

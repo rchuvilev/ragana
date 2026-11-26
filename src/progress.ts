@@ -29,7 +29,10 @@ export function formatProgress(p: Progress): string {
   const bar = p.total > 0 ? `${String(pct).padStart(3)}%` : '   ';
   const phase = PHASE_LABEL[p.phase];
   const file = p.file ? ` ${basename(p.file)}` : '';
-  const note = p.note ? ` ${p.note}` : '';
+  // Примечание не печатается, если оно повторяет название фазы:
+  // выходило «обход обход папки», что выглядит как сбой вывода.
+  const note = p.note && p.note !== phase && !p.note.startsWith(phase)
+    ? ` ${p.note}` : '';
   const eta = p.etaSec !== undefined && p.etaSec > 0
     ? `  ещё ~${humanEta(p.etaSec)}` : '';
   return `${bar} ${phase}${file}${note}${eta}`;

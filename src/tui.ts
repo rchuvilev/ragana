@@ -8,7 +8,6 @@
 //   - прогресс честный: он приходит из того же кода, что работает в CLI,
 //     а не из отдельной ветки, которая может разойтись с реальностью
 
-import { createInterface } from 'node:readline';
 import type { Layout } from './workspace.ts';
 import { RagStore } from './store.ts';
 import { humanEta } from './progress.ts';
@@ -113,14 +112,61 @@ function readStats(layout: Layout): { files: number; chunks: number } {
   }
 }
 
+/**
+ * Построчное чтение stdin.
+ *
+ * 🔴 ВМЕСТО node:readline, потому что в Bun он НЕ ОТДАЁТ второй ответ
+ * из пайпа — зависает намертво. Проверено отдельной пробой: два
+ * последовательных rl.question() при вводе через printf дают первый
+ * ответ и виснут на втором.
+ *
+ * В интерактивном режиме это незаметно (человек печатает медленнее
+ * обработки), но ломает всё неинтерактивное: подачу команд скриптом,
+ * автотесты TUI, запуск из другого процесса.
+ *
+ * Реализация простая: копим буфер, режем по переводу строки, выдаём
+ * ожидающим. Строки, пришедшие заранее, складываются в очередь — иначе
+ * быстрый ввод из пайпа терялся бы между вопросами.
+ */
+const decoder = new TextDecoder();
+let stdinBuffer = '';
+/** Строки, прочитанные до того, как их запросили. */
+const readyLines: string[] = [];
+/** Ожидающие ответа. */
+const waiting: Array<(line: string) => void> = [];
+let pumping = false;
+let streamEnded = false;
+
+async function pumpStdin(): Promise<void> {
+  if (pumping) return;
+  pumping = true;
+  for await (const chunk of process.stdin) {
+    stdinBuffer += decoder.decode(chunk as Uint8Array, { stream: true });
+    let idx: number;
+    while ((idx = stdinBuffer.indexOf('\n')) >= 0) {
+      const line = stdinBuffer.slice(0, idx).replace(/\r$/, '');
+      stdinBuffer = stdinBuffer.slice(idx + 1);
+      const waiter = waiting.shift();
+      if (waiter) waiter(line);
+      else readyLines.push(line);
+    }
+  }
+  // Поток закрылся: отпускаем всех ожидающих, иначе процесс повиснет
+  streamEnded = true;
+  for (const w of waiting.splice(0)) w('');
+}
+
 function ask(question: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer);
-    });
-  });
+  pumpStdin();
+  process.stdout.write(question);
+  const ready = readyLines.shift();
+  if (ready !== undefined) return Promise.resolve(ready);
+  if (streamEnded) return Promise.resolve('');
+  return new Promise((resolve) => waiting.push(resolve));
+}
+
+function closeReader(): void {
+  for (const w of waiting.splice(0)) w('');
 }
 
 export async function runTui(layout: Layout): Promise<number> {
@@ -134,9 +180,16 @@ export async function runTui(layout: Layout): Promise<number> {
     console.log();
 
     const choice = (await ask('  выбор: ')).trim().toLowerCase();
+    // Пустой ответ при закрытом stdin = конец потока: без выхода цикл
+    // крутился бы вечно, съедая процессор.
+    if (choice === '' && !process.stdin.isTTY) {
+      closeReader();
+      return 0;
+    }
     const item = MENU.find((m) => m.key === choice);
     if (!item) continue;
     if (item.action === 'quit') {
+      closeReader();
       clear();
       return 0;
     }
